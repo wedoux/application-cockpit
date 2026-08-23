@@ -21,6 +21,9 @@ DECLARED = {"English": "C2", "Greek": "native", "French": "B2", "Spanish": "B1"}
 @pytest.mark.parametrize("category", ["Leadership", "Advisory", "Senior IC"])
 def test_declared_languages_appear_in_each_master_cv(category):
     cfg = pa.load_config()
+    if not cfg.get("category_cv_map", {}).get(category):
+        pytest.skip(f"no master CV mapped for {category} in this config — "
+                     "nothing to check (the shipped sample only covers Leadership)")
     declared = cfg["profile"]["languages"]
     _, master_cv_text = pa.resolve_master_cv(category, cfg)
     # Master CVs write languages under a "## Languages" heading — either a
