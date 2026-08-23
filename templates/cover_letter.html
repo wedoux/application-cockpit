@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ profile.name }} — Cover Letter</title>
+<style>
+  {% include "_shared_style.html" %}
+
+  .body-text { font-size: 10.5pt; line-height: 1.65; white-space: pre-wrap; margin-top: 2mm; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  {% include "_header_block.html" %}
+
+  <div class="body-text">{{ body }}</div>
+
+</div>
+</body>
+</html>

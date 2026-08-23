@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ profile.name }} — CV</title>
+<style>
+  {% include "_shared_style.html" %}
+
+  /* Small-caps-style headers: uppercase + tracking + reduced size. Deliberately
+     NOT the CSS small-caps variant property — the embedded Inter build has no
+     true smcp feature, and a browser-synthesized fake would look wrong. */
+  h2.section {
+    font-size: 9.5pt; letter-spacing: 0.09em; text-transform: uppercase;
+    color: var(--accent); font-weight: 700; margin: 3.5mm 0 1mm;
+    page-break-after: avoid; break-after: avoid;
+  }
+  h2.section:first-of-type { margin-top: 0; }
+  .hairline { border: none; border-top: 1px solid var(--hairline); margin: 0 0 1.5mm; }
+
+  /* A header must never be the last thing on a page, orphaned from its own
+     content — avoid applies to the heading itself (above) and, for the short
+     tail sections, to the heading+content unit as a whole (below). Kept as
+     two separate small units, not one block wrapping both sections, so
+     Education and Languages can still land on different pages from each
+     other if a longer Education list ever needs it. */
+  /* display:table, not just break-inside:avoid: Chromium's print fragmenter
+     does not reliably keep a plain block together across a page boundary
+     when it's the tail of the flow (verified — a heading landed alone at
+     the bottom of a page with its own body text pushed to the next page
+     despite break-inside:avoid). A table-formatting-context box is treated
+     as atomic and does not get split this way. */
+  .tail-block { display: table; page-break-inside: avoid; break-inside: avoid; }
+
+  .profile-text { font-size: 9.5pt; line-height: 1.33; margin: 0; orphans: 2; widows: 2; }
+  .lead-item { font-size: 9.5pt; line-height: 1.33; margin: 0 0 1mm; orphans: 2; widows: 2; }
+
+  .exp-block { margin: 0 0 2.5mm; page-break-inside: avoid; break-inside: avoid; }
+  .exp-block:last-child { margin-bottom: 0; }
+  .exp-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 4mm; }
+  .exp-title { font-weight: 700; font-size: 10pt; line-height: 1.3; }
+  .exp-logo { max-height: 8mm; max-width: 34mm; object-fit: contain; flex-shrink: 0; margin-top: 1mm; }
+  .exp-meta { font-style: italic; color: var(--muted); font-size: 8.5pt; margin: 0.5mm 0 1mm; }
+  ul.bullets { margin: 0; padding-left: 4.5mm; }
+  ul.bullets li { font-size: 9.5pt; line-height: 1.33; margin: 0 0 0.75mm; orphans: 2; widows: 2; }
+  ul.bullets li:last-child { margin-bottom: 0; }
+
+  .edu-item { font-size: 9.5pt; line-height: 1.33; margin: 0 0 0.5mm; orphans: 2; widows: 2; }
+  .lang-line { font-size: 9.5pt; line-height: 1.33; margin: 0; orphans: 2; widows: 2; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  {% include "_header_block.html" %}
+
+  <h2 class="section">Profile</h2>
+  <hr class="hairline">
+  <p class="profile-text">{{ cv.profile }}</p>
+
+  <h2 class="section">What I lead</h2>
+  <hr class="hairline">
+  {% for item in what_i_lead %}
+  <p class="lead-item">{% if item.label %}<b>{{ item.label }}:</b> {% endif %}{{ item.detail }}</p>
+  {% endfor %}
+
+  <h2 class="section">Experience</h2>
+  <hr class="hairline">
+  {% for e in experience %}
+  <div class="exp-block">
+    <div class="exp-head">
+      <div class="exp-title">{{ e.role }} — {{ e.company }}</div>
+      {% if e.logo_uri %}<img class="exp-logo" src="{{ e.logo_uri }}" alt="{{ e.company }} logo">{% endif %}
+    </div>
+    {% if e.meta %}<div class="exp-meta">{{ e.meta }}</div>{% endif %}
+    <ul class="bullets">
+      {% for b in e.bullets %}<li>{{ b }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endfor %}
+
+  {% if projects %}
+  <h2 class="section">Projects</h2>
+  <hr class="hairline">
+  {% for pr in projects %}
+  <div class="exp-block">
+    <div class="exp-title">{{ pr.name }}</div>
+    {% if pr.context %}<div class="exp-meta">{{ pr.context }}</div>{% endif %}
+    <ul class="bullets">
+      {% for b in pr.bullets %}<li>{{ b }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endfor %}
+  {% endif %}
+
+  <div class="tail-block">
+  <h2 class="section">Education</h2>
+  <hr class="hairline">
+  {% for pair in education_pairs %}
+  <p class="edu-item">{% for ed in pair %}<b>{{ ed.qualification }}</b> — {{ ed.institution }} ({{ ed.dates }}){% if not loop.last %}. {% endif %}{% endfor %}</p>
+  {% endfor %}
+  </div>
+
+  <div class="tail-block">
+  <h2 class="section">Languages</h2>
+  <hr class="hairline">
+  <p class="lang-line">{{ language_line }}</p>
+  </div>
+
+</div>
+</body>
+</html>

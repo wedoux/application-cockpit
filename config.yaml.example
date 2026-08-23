@@ -1,0 +1,124 @@
+# Resident context for the application cockpit.
+# This is what makes generation zero-touch: paths + per-category CV map, loaded
+# fresh on every generate call. Secrets live in .env, never here.
+#
+# Copy this file to config.yaml and fill in your own values:
+#   cp config.yaml.example config.yaml
+#
+# The paths below are repo-relative and point at the fabricated sample
+# profile shipped in sample-profile/, including a genuinely reusable
+# writing-rules.md (Wikipedia's own AI-writing-tells catalogue, not
+# fabricated) — swap any of it, or all of it, for your own real profile
+# whenever you're ready; nothing else in the codebase needs to change.
+
+model: claude-sonnet-5          # generation model, overridable
+critic_model: claude-sonnet-5   # optional Phase 4 critic pass
+
+paths:
+  writing_rules: ./sample-profile/writing-rules.md
+  about_me:      ./sample-profile/professional-profile.md
+  cv_dir:        ./sample-profile/cv
+  assets:        ./sample-profile/cv/assets
+
+# Category -> master CV file (content + voice source), relative to cv_dir.
+# Review has no auto-CV: the UI must prompt for a real category before
+# generating. Only Leadership has a sample CV — Advisory/Senior IC are null
+# here; add your own files and map them when you're ready.
+category_cv_map:
+  Leadership: cv-leadership.md
+  Advisory:   null
+  Senior IC:  null
+  Review:     null
+
+# Company -> logo asset (relative to assets/), used by the CV renderer.
+# Optional entirely — an experience entry whose company isn't listed here
+# (or an empty map, like this sample) renders with no logo, not an error.
+company_logo_map: {}
+
+# CV header content. The template renders entirely from this block —
+# nothing personal is hardcoded in the template or the Python.
+profile:
+  name:     Jordan Reyes
+  # preferred_name: optional — overrides the first-token-of-name default used
+  # in generation prompts. Omitted here since "Jordan" is already right; add
+  # your own if your first name isn't what you actually go by day to day
+  # (a nickname, a shortened form, a name you go by that isn't your legal
+  # first name).
+  email:    jordan.reyes@example.com
+  phone:    "+41 79 000 00 00"
+  location: Zurich, Switzerland
+  linkedin: linkedin.com/in/jordanreyes-sample
+  # headshot: omitted entirely here on purpose — the renderer degrades to
+  # "no headshot" cleanly when this key is absent or null. Add
+  # headshot: yourphoto.png (resolved against paths.assets) when ready.
+  # tagline_quote: also omitted on purpose — an optional signature
+  # positioning line that drives one rule in prompt_assembly.py's role
+  # frame when present. Add your own here if you have one, e.g.
+  # tagline_quote: "Your one-line positioning statement."
+  taglines:                # the line under the name, one per category
+    Leadership: Head / VP / Director of Design — design org building, product strategy, operationally complex platforms
+    Advisory:   Design advisor — operating models, product strategy
+    Senior IC:  Senior Product Designer | Operationally complex platforms, multi-site workflows
+  # Structured, so the language gate has a real declaration to check a
+  # posting's requirements against, and so this can never silently drift
+  # from what the master CV's own Languages section says — matching
+  # tests/test_language_gate.py's own assertion for the real profile.
+  #
+  # Deliberately only two languages, one of them below a common Swiss
+  # bar: German is entirely undeclared (a Zurich posting requiring German
+  # BLOCKs, with the requirement quoted verbatim) and French is B2 (a
+  # posting requiring French C1 WARNs rather than blocking). Both gate
+  # outcomes are demonstrable from this one sample profile — see the
+  # README's language-gate screenshots.
+  languages:
+    English: native
+    French:  B2
+
+# Scanner targeting — which companies to check, and what counts as a match.
+# Moved out of job_scanner.py and in here 2026-08-19: hardcoded Python
+# constants meant anyone who wanted their own targets had to edit the
+# scanner itself. Copy this file to config.yaml and replace the starter
+# set below with your own companies, or keep it as-is for a first scan.
+scanner:
+  # A handful of well-known companies across the three lightest-weight ATS
+  # APIs (no auth, no browser automation) so a first scan returns something
+  # rather than zero. handler is one of: workday, greenhouse, lever, ashby,
+  # smartrecruiters, workable, oracle_hcm — target is that handler's API
+  # URL or board slug (see job_scanner.py's search_* functions for the
+  # exact shape each handler expects).
+  companies:
+    - company: Figma
+      handler: greenhouse
+      target: https://boards-api.greenhouse.io/v1/boards/figma/jobs
+    - company: Sonar
+      handler: lever
+      target: https://api.lever.co/v0/postings/sonarsource
+    - company: Linear
+      handler: ashby
+      target: linear
+
+  # Broad design/UX title patterns — deliberately generic, not tuned to
+  # any one search track. Widen or narrow these to match your own targets.
+  title_patterns:
+    - (?i)head\s*of\s*(product\s*)?design
+    - (?i)(design|ux|user\s*experience)\s*director
+    - (?i)(design|ux)\s*manager
+    - (?i)(design|ux)\s*lead
+    - (?i)(senior|staff|principal|lead)\s+(product\s*)?designer
+    - (?i)\bdesigner\b
+    - (?i)(ux|user\s*experience)\s*(researcher|consultant|strategist)
+
+  # Permissive on purpose — a stranger's first scan shouldn't silently
+  # drop everything because their own city isn't on a Swiss-tuned list.
+  # Narrow this once you know where you're actually looking.
+  location_patterns:
+    - .*
+
+  # Companies with no public ATS API — checked by hand instead of
+  # scanned. Purely informational: nothing in job_scanner.py reads this
+  # list, only the optional sourcing/manual-check workflows do (see
+  # Scheduled/manual-check-jobs-sweep, if you're using it). Optional —
+  # omit entirely if you don't have any yet, or don't use that workflow.
+  manual_check:
+    - "Example Bank — https://careers.examplebank.com (SuccessFactors)"
+    - "Example Pharma — https://jobs.examplepharma.com (Taleo)"

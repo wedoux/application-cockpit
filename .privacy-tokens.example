@@ -1,0 +1,25 @@
+# One real personal identifier per line — checked as a literal
+# byte-string substring by check_privacy.py, both across the current
+# working tree and the full git history (git cat-file, not git log -p,
+# so this also catches a binary blob committed and later removed).
+#
+# Copy this file to .privacy-tokens and fill in your own values.
+# .privacy-tokens itself MUST stay gitignored — never commit it, it's
+# the token list, and a script whose own source (or token file) embeds
+# the personal data it's checking for would fail on itself forever.
+#
+# Lines starting with # and blank lines are ignored.
+
+# Full name
+# Surname alone
+# Personal email
+# Any handle that identifies you (LinkedIn, etc.)
+# Phone, as written
+# Phone, digits only, no formatting
+# Home town / specific location
+# Former employer names exactly as they appear in your CV/config —
+#   use the full division/entity string, not a bare company name, since
+#   a bare name may legitimately appear elsewhere as a scan target and
+#   not as personal history
+# API key prefix (the fixed leading characters your provider always uses)
+# Your absolute home-directory path prefix

@@ -1,0 +1,50 @@
+# Secrets — never commit
+.env
+
+# Real profile + scanner targeting — name, email, phone, location, and the
+# real company/title/location/manual-check lists. config.yaml.example is
+# the committed template.
+config.yaml
+
+# The privacy-check token list itself — real personal identifiers. A
+# script whose own token file embeds the data it's checking for would
+# fail on itself forever. .privacy-tokens.example (no real values) is
+# the committed template.
+.privacy-tokens
+
+# Local database. Sidecar files (-journal, and -wal/-shm should journal_mode
+# ever move to WAL) can hold literal fragments of uncommitted write content —
+# an interrupted transaction (e.g. a write that can't complete over a
+# restricted mount) can leave one behind; SQLite recovers it safely on the
+# next open, but the leftover file itself is real content, not a
+# regeneratable artifact, and must never be swept into a commit.
+cockpit.db
+cockpit.db-journal
+cockpit.db-wal
+cockpit.db-shm
+*.bak
+
+# Pre-mutation snapshots (db.backup_db) — data, not code; not a substitute
+# for the phase tags, which protect code only
+backups/
+
+# Scanner run log — the crontab now writes this outside the repo entirely
+# (~/Library/Logs/), but ignore the name defensively in case anything ever
+# writes it here again.
+scan.log
+
+# Generated application documents
+applications/
+
+# One-off dev/QA artifacts — regenerate, don't commit
+cv_preview_smoke.html
+cv_compare_headofdesign.html
+scratch_convert_master_cv.py
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# macOS
+.DS_Store

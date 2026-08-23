@@ -1,0 +1,10 @@
+  <div class="header">
+    {% if headshot_uri %}<img class="headshot" src="{{ headshot_uri }}" alt="">{% endif %}
+    <div class="name">{{ profile.name }}</div>
+    {% if tagline %}<div class="tagline">{{ tagline }}</div>{% endif %}
+    <div class="contact">
+      {{ profile.location }}<br>
+      {{ profile.email }} · {{ profile.phone }} · {{ profile.linkedin }}
+    </div>
+  </div>
+  <hr class="rule-thick">

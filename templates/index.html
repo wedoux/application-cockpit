@@ -1,0 +1,1018 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Application cockpit — Swiss Arc</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #11141a; --panel: #181c25; --row: #1c212c; --row-hover: #232a38;
+    --text: #e6e9f0; --muted: #8b93a7; --line: #2a3140; --accent: #6ea8fe;
+    --sourced: #f5b83d; --reviewing: #b48ef5; --drafted: #6ea8fe;
+    --submitted: #46c7c7; --interview: #4cc38a; --offer: #7bd88f;
+    --rejected: #e5654c; --ignored: #6b7388; --expired: #6b7388;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif; }
+  header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; padding: 22px 28px 14px; }
+  h1 { font-size: 17px; font-weight: 650; margin: 0; letter-spacing: .2px; }
+  #meta { color: var(--muted); font-size: 12.5px; }
+  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 0 28px 16px; }
+  .chip { border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+          border-radius: 999px; padding: 4px 13px; cursor: pointer; font-size: 12.5px; white-space: nowrap; }
+  .chip.active { color: var(--text); border-color: var(--accent); }
+  .chip b { color: var(--text); font-weight: 600; margin-left: 2px; }
+  .chip .swatch { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:6px; vertical-align: middle; }
+  #search { margin-left: auto; background: var(--panel); border: 1px solid var(--line); color: var(--text);
+            border-radius: 8px; padding: 6px 12px; width: 220px; outline: none; }
+  #search:focus { border-color: var(--accent); }
+  #scanBtn { background: var(--accent); color: #0c1220; border: 0; border-radius: 8px;
+             padding: 7px 16px; font-weight: 600; cursor: pointer; }
+  #scanBtn:disabled { opacity: .5; cursor: wait; }
+  main { padding: 0 28px 48px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; color: var(--muted); font-size: 11.5px; text-transform: uppercase;
+       letter-spacing: .6px; font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line);
+       cursor: pointer; user-select: none; white-space: nowrap; }
+  th .arrow { color: var(--accent); }
+  td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--row-hover); }
+  tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  tr.s-rejected td.titlecell a, tr.s-rejected td.titlecell span,
+  tr.s-expired td.titlecell a, tr.s-expired td.titlecell span,
+  tr.s-ignored td.titlecell a, tr.s-ignored td.titlecell span { text-decoration: line-through; color: var(--muted); }
+  tr.s-rejected td, tr.s-expired td, tr.s-ignored td { color: var(--muted); }
+  td.company { font-weight: 600; white-space: nowrap; }
+  a { color: var(--text); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  a:hover { color: var(--accent); border-color: var(--accent); }
+  .muted { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+  .score { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .sc-high { color: #7bd88f; } .sc-mid { color: #f5b83d; } .sc-low { color: var(--muted); }
+  select.status { background: var(--row); border: 1px solid var(--line); border-radius: 6px;
+                  padding: 3px 6px; font-size: 12px; text-transform: capitalize; outline: none; }
+  select.v-sourced { color: var(--sourced); border-color: #5a4a20; }
+  select.v-reviewing { color: var(--reviewing); border-color: #4a3a6a; }
+  select.v-drafted { color: var(--drafted); border-color: #2e4a7a; }
+  select.v-submitted { color: var(--submitted); border-color: #1f5252; }
+  select.v-interview { color: var(--interview); border-color: #2e5a3a; }
+  select.v-offer { color: var(--offer); border-color: #2e5a3a; }
+  select.v-rejected { color: var(--rejected); border-color: #5a2e26; }
+  select.v-ignored, select.v-expired { color: var(--ignored); border-color: var(--line); }
+  input.edit { background: var(--row); border: 1px solid transparent; color: var(--text);
+               border-radius: 6px; padding: 4px 7px; font-size: 12.5px; width: 100%; outline: none; }
+  input.edit:hover { border-color: var(--line); }
+  input.edit:focus { border-color: var(--accent); background: var(--panel); }
+  td.next { max-width: 220px; white-space: normal; overflow-wrap: break-word; }
+  #empty { padding: 60px 0; text-align: center; color: var(--muted); }
+  #toast { position: fixed; bottom: 24px; right: 28px; background: var(--panel); border: 1px solid var(--line);
+           border-radius: 10px; padding: 10px 18px; opacity: 0; transition: opacity .25s;
+           pointer-events: none; font-size: 13px; }
+  #toast.show { opacity: 1; }
+  #toast.err { border-color: var(--rejected); color: #ffb4a6; }
+  #scanOut { display: none; margin: 14px 0 0; background: var(--panel); border: 1px solid var(--line);
+             border-radius: 10px; padding: 14px 18px; white-space: pre-wrap;
+             font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace; color: var(--muted);
+             max-height: 320px; overflow: auto; }
+  /* Role detail drawer */
+  #scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none;
+           transition: opacity .2s; z-index: 40; }
+  #scrim.open { opacity: 1; pointer-events: auto; }
+  #drawer { position: fixed; top: 0; right: 0; height: 100%; width: min(960px, 94vw); background: var(--bg);
+            border-left: 1px solid var(--line); transform: translateX(100%); transition: transform .22s;
+            z-index: 41; display: flex; flex-direction: column; }
+  #drawer.open { transform: translateX(0); }
+  .dw-head { padding: 20px 24px 14px; border-bottom: 1px solid var(--line); }
+  .dw-head h2 { margin: 0 0 4px; font-size: 16px; font-weight: 650; }
+  .dw-head .sub { color: var(--muted); font-size: 12.5px; }
+  .dw-close { position: absolute; top: 16px; right: 18px; background: none; border: 0; color: var(--muted);
+              font-size: 22px; cursor: pointer; line-height: 1; }
+  .dw-body { padding: 18px 24px 40px; overflow: auto; flex: 1; }
+  .dw-body h3 { font-size: 11.5px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+                margin: 22px 0 8px; font-weight: 600; }
+  .dw-body h3:first-child { margin-top: 0; }
+  .dw-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .dw-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
+  .dw-grid label, .dw-body > label { display: block; font-size: 11px; text-transform: uppercase;
+                    letter-spacing: .5px; color: var(--muted); margin: 0 0 4px; }
+  .dw-body > label { margin-top: 14px; }
+  .dw-grid input.edit { width: 100%; box-sizing: border-box; }
+  #fNotes { width: 100%; min-height: 70px; resize: vertical; background: var(--row); border: 1px solid transparent;
+            color: var(--text); border-radius: 6px; padding: 6px 8px; font: 12.5px/1.5 inherit; outline: none;
+            box-sizing: border-box; }
+  #fNotes:hover { border-color: var(--line); }
+  #fNotes:focus { border-color: var(--accent); background: var(--panel); }
+  #jd { width: 100%; min-height: 150px; resize: vertical; background: var(--panel); border: 1px solid var(--line);
+        color: var(--text); border-radius: 8px; padding: 10px 12px; font: 12.5px/1.5 inherit; outline: none; }
+  #jd:focus { border-color: var(--accent); }
+  .btn { background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 8px;
+         padding: 7px 14px; cursor: pointer; font-size: 13px; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); color: #0c1220; border: 0; font-weight: 600; }
+  .btn:disabled { opacity: .5; cursor: wait; }
+  select#dwcat { background: var(--panel); border: 1px solid var(--line); color: var(--text);
+                 border-radius: 8px; padding: 6px 10px; font-size: 13px; outline: none; }
+  .doc { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line);
+         border-radius: 8px; margin-bottom: 6px; font-size: 12.5px; }
+  .doc .grow { flex: 1; }
+  .doc .badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); }
+  .doc .badge.approved { color: var(--offer); border-color: #2e5a3a; }
+  .doc .badge.draft { color: var(--sourced); border-color: #5a4a20; }
+  .doc .badge.lang-block { color: var(--rejected); border-color: #5a2020; }
+  .doc .badge.lang-warn { color: var(--sourced); border-color: #5a4a20; }
+  #viewerLangGate.lang-block { color: var(--rejected); }
+  #viewerLangGate.lang-warn-text { color: var(--sourced); }
+  .title-mismatch-warn { color: #ffb4a6; border: 1px solid #5a2020; border-radius: 6px;
+                          padding: 6px 10px; margin-bottom: 8px; font-size: 12.5px; }
+  .repost-badge { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line);
+                   color: var(--muted); margin-left: 6px; white-space: nowrap; cursor: help; }
+  #repostInfo { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 4px; }
+  #viewer { display: none; margin-top: 14px; }
+  #viewerNote { display: none; margin-bottom: 10px; }
+  #viewerFrame { display: none; width: 100%; height: 60vh; border: 1px solid var(--line);
+                 border-radius: 10px; background: #fff; }
+  #viewerText { display: none; margin: 0; background: var(--panel); border: 1px solid var(--line);
+                border-radius: 10px; padding: 16px 18px; white-space: pre-wrap; font: 13px/1.6 inherit;
+                color: var(--text); max-height: 46vh; overflow: auto; }
+  #genMsg { color: var(--muted); font-size: 12.5px; margin-left: 4px; }
+  #genMsg.err { color: #ffb4a6; }
+  #addBtn { background: var(--panel); border: 1px solid var(--line); color: var(--text);
+            border-radius: 8px; padding: 7px 14px; cursor: pointer; font-size: 13px; }
+  #addBtn:hover { border-color: var(--accent); }
+  /* Add-role modal */
+  #addScrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none;
+              transition: opacity .2s; z-index: 50; }
+  #addScrim.open { opacity: 1; pointer-events: auto; }
+  #addModal { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-48%) scale(.98);
+              opacity: 0; pointer-events: none; width: min(560px, 92vw); background: var(--bg);
+              border: 1px solid var(--line); border-radius: 14px; z-index: 51; padding: 22px 24px;
+              transition: opacity .18s, transform .18s; }
+  #addModal.open { opacity: 1; pointer-events: auto; transform: translate(-50%,-50%) scale(1); }
+  #addModal h2 { margin: 0 0 6px; font-size: 16px; }
+  #addModal label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
+                    color: var(--muted); margin: 12px 0 4px; }
+  #addModal input, #addModal textarea, #addModal select { width: 100%; background: var(--panel);
+              border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 8px 10px;
+              font: 13px inherit; outline: none; }
+  #addModal input:focus, #addModal textarea:focus { border-color: var(--accent); }
+  #addModal textarea { min-height: 84px; resize: vertical; }
+  #addModal .actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; align-items: center; }
+  #addMsg { margin-right: auto; font-size: 12.5px; color: var(--muted); }
+  #addMsg.err { color: #ffb4a6; }
+
+  #scanScrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none;
+              transition: opacity .2s; z-index: 50; }
+  #scanScrim.open { opacity: 1; pointer-events: auto; }
+  #scanHealth { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+  #scanHealth:hover { color: var(--text); }
+  #scanHealth .err { color: var(--rejected); }
+  #scanModal { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-48%) scale(.98);
+              opacity: 0; pointer-events: none; width: min(920px, 94vw); max-height: 84vh; overflow: auto;
+              background: var(--bg); border: 1px solid var(--line); border-radius: 14px; z-index: 51;
+              padding: 22px 24px; transition: opacity .18s, transform .18s; }
+  #scanModal.open { opacity: 1; pointer-events: auto; transform: translate(-50%,-50%) scale(1); }
+  #scanModal h2 { margin: 0 0 4px; font-size: 16px; }
+  #scanModal .sub { color: var(--muted); font-size: 12.5px; margin-bottom: 14px; }
+  #scanModal table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  #scanModal th { text-align: left; color: var(--muted); font-weight: 500; font-size: 11px;
+              text-transform: uppercase; letter-spacing: .4px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  #scanModal td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  #scanModal tr.outcome-error td:first-child, #scanModal tr.outcome-skipped_robots td:first-child { color: var(--rejected); }
+  .funnel-num { font-variant-numeric: tabular-nums; }
+  .funnel-num.zero { color: var(--muted); }
+  .scan-badge { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
+  .scan-badge.ok { color: var(--offer); }
+  .scan-badge.error { color: var(--rejected); border-color: #5a2020; }
+  .scan-badge.skipped_robots { color: var(--sourced); border-color: #5a4a20; }
+  .scan-badge.failing { color: var(--rejected); border-color: #5a2020; margin-left: 6px; }
+  .error-detail { color: #ffb4a6; font-size: 11.5px; margin-top: 3px; }
+  .dropped-toggle { color: var(--accent); font-size: 11.5px; cursor: pointer; background: none; border: none;
+              padding: 0; text-decoration: underline dotted; }
+  .dropped-list { display: none; font-size: 11.5px; color: var(--muted); margin-top: 4px; max-width: 320px; }
+  .dropped-list.open { display: block; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Application cockpit — Swiss Arc</h1>
+  <span id="meta"></span>
+  <span id="scanHealth"></span>
+</header>
+<div class="toolbar">
+  <span id="chips"></span>
+  <input id="search" type="search" placeholder="Filter company, role or note…">
+  <label id="quotaToggleLabel" style="font-size:12.5px; color:var(--muted); display:flex; align-items:center; gap:5px; cursor:pointer">
+    <input type="checkbox" id="quotaToggle"> <span id="quotaToggleText">Include Quota</span>
+  </label>
+  <button id="addBtn" title="Add a role the scanner missed">＋ Add role</button>
+  <button id="scanBtn" title="Runs scan_all_companies() in-process → SQLite">Run scan now</button>
+</div>
+<main>
+  <table id="tbl">
+    <thead><tr>
+      <th data-k="company">Company <span class="arrow"></span></th>
+      <th data-k="title">Role <span class="arrow"></span></th>
+      <th data-k="category">Category <span class="arrow"></span></th>
+      <th data-k="score">Score <span class="arrow"></span></th>
+      <th data-k="status">Status <span class="arrow"></span></th>
+      <th data-k="interest">Interest <span class="arrow"></span></th>
+      <th data-k="due">Due <span class="arrow"></span></th>
+      <th data-k="next_action">Next action <span class="arrow"></span></th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+  <div id="empty" hidden></div>
+  <div id="scanOut"></div>
+</main>
+<div id="toast"></div>
+
+<div id="addScrim"></div>
+<div id="addModal">
+  <h2>Add a role manually</h2>
+  <div class="muted" style="font-size:12.5px">For a role the scanner missed. Give a URL (we'll try to fetch the JD) or paste the JD.</div>
+  <label>Company *</label>
+  <input id="addCompany" placeholder="e.g. Acme Corp">
+  <label>Title</label>
+  <input id="addTitle" placeholder="e.g. Head of Design (optional, auto-filled from the page)">
+  <label>Job URL</label>
+  <input id="addUrl" placeholder="https://…">
+  <label>Category</label>
+  <select id="addCat"></select>
+  <label>JD text (optional, paste to skip fetching)</label>
+  <textarea id="addJd" placeholder="Leave blank to fetch from the URL, or paste the description here"></textarea>
+  <div id="addDup" style="display:none; margin-top:12px; border:1px solid var(--line); border-radius:8px; padding:10px 12px; background:var(--panel)">
+    <div class="muted" id="addDupText" style="margin-bottom:8px"></div>
+    <div class="dw-row">
+      <button class="btn" id="addDupOpen">Open the existing role</button>
+      <button class="btn primary" id="addDupForce">Add anyway</button>
+    </div>
+  </div>
+  <div id="addPreview" style="display:none; margin-top:12px; border:1px solid var(--line); border-radius:8px; padding:10px 12px; background:var(--panel)">
+    <div class="muted" id="addPreviewMeta" style="margin-bottom:6px"></div>
+    <div class="title-mismatch-warn" id="addPreviewWarn" style="display:none"></div>
+    <div id="addPreviewText" style="white-space:pre-wrap; font-size:12.5px; max-height:160px; overflow:auto; margin-bottom:10px"></div>
+    <div class="dw-row">
+      <button class="btn primary" id="addPreviewAccept">Accept: save as JD</button>
+      <button class="btn" id="addPreviewReject">Reject: I'll paste it</button>
+    </div>
+  </div>
+  <div class="actions">
+    <span id="addMsg"></span>
+    <button class="btn" id="addCancel">Cancel</button>
+    <button class="btn primary" id="addSubmit">Add role</button>
+  </div>
+</div>
+
+<div id="scanScrim"></div>
+<div id="scanModal">
+  <h2>Last scan</h2>
+  <div class="sub" id="scanModalSub"></div>
+  <table>
+    <thead><tr>
+      <th>Company</th><th>Portal</th><th>Outcome</th>
+      <th>Raw</th><th>Title</th><th>Location</th><th>Inserted</th>
+    </tr></thead>
+    <tbody id="scanModalBody"></tbody>
+  </table>
+</div>
+
+<div id="scrim"></div>
+<aside id="drawer">
+  <div class="dw-head">
+    <button class="dw-close" title="Close">×</button>
+    <h2 id="dwTitle">—</h2>
+    <div class="sub" id="dwSub"></div>
+  </div>
+  <div class="dw-body">
+    <h3>Category</h3>
+    <div class="dw-row">
+      <select id="dwcat"></select>
+      <span class="muted" id="dwcatNote"></span>
+    </div>
+
+    <div id="repostBlock" style="display:none">
+      <h3>Repost</h3>
+      <div id="repostInfo" class="muted"></div>
+    </div>
+
+    <div id="decisionBlock" style="display:none">
+      <h3>Decision</h3>
+      <div class="dw-grid">
+        <div><label>Reason</label><select id="fDecisionReason" class="edit" data-field="decision_reason"></select></div>
+      </div>
+      <label>Note</label>
+      <textarea id="fDecisionNote" class="edit" data-field="decision_note" placeholder="—"></textarea>
+    </div>
+
+    <h3>Tracking</h3>
+    <div class="dw-grid">
+      <div><label>Interest</label><select id="fInterest" class="edit" data-field="interest"></select></div>
+      <div><label>Channel</label><input id="fChannel" class="edit" data-field="channel" placeholder="—"></div>
+      <div><label>Location</label><input id="fLocation" class="edit" data-field="location" placeholder="—"></div>
+      <div><label>Applied date</label><input id="fApplied" class="edit" data-field="applied_date" placeholder="—"></div>
+      <div><label>Due date</label><input id="fDue" class="edit" data-field="due" placeholder="—"></div>
+      <div><label>Next action</label><input id="fNextAction" class="edit" data-field="next_action" placeholder="—"></div>
+    </div>
+    <label>Notes</label>
+    <textarea id="fNotes" class="edit" data-field="notes" placeholder="—"></textarea>
+
+    <h3>Job description</h3>
+    <textarea id="jd" placeholder="Paste the job description here…"></textarea>
+    <div class="dw-row" style="margin-top:8px">
+      <button class="btn" id="saveJd">Save JD</button>
+      <button class="btn" id="fetchJd">Fetch JD</button>
+      <span class="muted" id="jdSrc"></span>
+    </div>
+    <div id="jdPreview" style="display:none; margin-top:10px; border:1px solid var(--line); border-radius:8px; padding:10px 12px; background:var(--panel)">
+      <div class="muted" id="jdPreviewMeta" style="margin-bottom:6px"></div>
+      <div class="title-mismatch-warn" id="jdPreviewWarn" style="display:none"></div>
+      <div id="jdPreviewText" style="white-space:pre-wrap; font-size:12.5px; max-height:160px; overflow:auto; margin-bottom:10px"></div>
+      <div class="dw-row">
+        <button class="btn primary" id="jdPreviewAccept">Accept: save as JD</button>
+        <button class="btn" id="jdPreviewReject">Reject</button>
+      </div>
+    </div>
+
+    <h3>Generate</h3>
+    <div class="dw-row">
+      <button class="btn primary" data-doc="cv">Generate CV</button>
+      <button class="btn primary" data-doc="cover_letter">Generate cover letter</button>
+      <button class="btn" data-doc="both">Both</button>
+      <span id="genMsg"></span>
+    </div>
+
+    <h3>Documents</h3>
+    <div id="docs"><span class="muted">None yet.</span></div>
+
+    <div id="viewer">
+      <div class="dw-row" id="viewerBar">
+        <span class="muted" id="viewerMeta"></span>
+        <span class="muted" id="viewerFidelity" title="Advisory, never blocks generation or approval"></span>
+        <span id="viewerLangGate" title="Language gate — BLOCK stops generation, WARN never does"></span>
+        <span style="flex:1"></span>
+        <button class="btn" id="viewerRawBtn"></button>
+        <button class="btn" id="viewerApproveBtn">Approve</button>
+        <button class="btn primary" id="viewerDownloadBtn">Download PDF</button>
+      </div>
+      <div class="muted" id="viewerNote"></div>
+      <iframe id="viewerFrame"></iframe>
+      <pre id="viewerText"></pre>
+    </div>
+  </div>
+</aside>
+
+<script>
+let roles = [], statuses = [], categories = [], interests = [], decisionReasons = [];
+let filter = "all", query = "", sortKey = "score", sortAsc = false;
+let includeQuota = false;
+const $ = s => document.querySelector(s);
+const tbody = $("#tbl tbody");
+const CLOSED = new Set(["rejected","ignored","expired"]);
+
+function toast(msg, err){
+  const t=$("#toast"); t.textContent=msg; t.classList.toggle("err", !!err); t.classList.add("show");
+  clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("show"), 2000);
+}
+
+// "Active" and every header count/filter/view default to real pipeline only
+// (interest != 'Quota') — 33 active is misleading when 13 of those are
+// Quota and will never move. The toggle opts back into the full set.
+function visibleRoles(){
+  return includeQuota ? roles : roles.filter(j=>j.interest!=="Quota");
+}
+
+async function load() {
+  const r = await fetch("/api/roles");
+  const d = await r.json();
+  roles = d.roles || []; statuses = d.statuses || []; categories = d.categories || []; interests = d.interests || [];
+  decisionReasons = d.decision_reasons || [];
+  updateMeta();
+  buildChips(); render();
+}
+
+function updateMeta(){
+  const quotaCount = roles.filter(j=>j.interest==="Quota").length;
+  const visible = visibleRoles();
+  const active = visible.filter(j=>!CLOSED.has(j.status)).length;
+  $("#meta").textContent = `${visible.length} roles · ${active} active · ${visible.length-active} closed`
+    + (quotaCount && !includeQuota ? ` · ${quotaCount} Quota hidden` : "")
+    + ` · source: cockpit.db`;
+  $("#quotaToggleText").textContent = quotaCount ? `Include Quota (${quotaCount})` : "Include Quota";
+}
+
+function statusList(){
+  const present=[...new Set(visibleRoles().map(j=>j.status).filter(Boolean))];
+  present.sort((a,b)=>{ let ia=statuses.indexOf(a),ib=statuses.indexOf(b); if(ia<0)ia=99; if(ib<0)ib=99; return ia-ib||a.localeCompare(b); });
+  return present;
+}
+
+function buildChips(){
+  const visible = visibleRoles();
+  const counts={all:visible.length}; visible.forEach(j=>counts[j.status]=(counts[j.status]||0)+1);
+  const items=[["all","All"]].concat(statusList().map(s=>[s,s]));
+  $("#chips").innerHTML=items.map(([f,label])=>{
+    const sw=f==="all"?"":`<span class="swatch" style="background:var(--${f},var(--muted))"></span>`;
+    return `<span class="chip${f===filter?" active":""}" data-f="${f}">${sw}${label} <b>${counts[f]||0}</b></span>`;
+  }).join("");
+  document.querySelectorAll(".chip").forEach(ch=>ch.addEventListener("click",()=>{ filter=ch.dataset.f; buildChips(); render(); }));
+}
+
+$("#quotaToggle").addEventListener("change", e=>{
+  includeQuota = e.target.checked;
+  updateMeta(); buildChips(); render();
+});
+
+function render(){
+  let rows=visibleRoles().filter(j=>filter==="all"||j.status===filter);
+  if(query){ const q=query.toLowerCase();
+    rows=rows.filter(j=>(j.company+" "+j.title+" "+(j.notes||"")+" "+(j.channel||"")).toLowerCase().includes(q)); }
+  rows.sort((a,b)=>{
+    let va=a[sortKey], vb=b[sortKey];
+    if(sortKey==="score"){ va=parseFloat(va); vb=parseFloat(vb); if(isNaN(va))va=-1; if(isNaN(vb))vb=-1; return (va-vb)*(sortAsc?1:-1); }
+    va=(""+(va||"")).toLowerCase(); vb=(""+(vb||"")).toLowerCase(); return (va<vb?-1:va>vb?1:0)*(sortAsc?1:-1);
+  });
+  document.querySelectorAll("th[data-k]").forEach(th=>{
+    th.querySelector(".arrow").textContent=th.dataset.k===sortKey?(sortAsc?"↑":"↓"):""; });
+  tbody.innerHTML="";
+  const empty=$("#empty");
+  if(!rows.length){ empty.hidden=false; empty.textContent=roles.length?"Nothing matches this filter.":"No roles yet. Run a scan."; return; }
+  empty.hidden=true;
+  for(const j of rows){
+    const tr=document.createElement("tr"); tr.className="s-"+j.status;
+    const roleCell=(j.url?`<a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a>`:`<span>${esc(j.title)}</span>`)
+      + repostBadge(j);
+    const statusCell=`<select class="status v-${j.status}" data-field="status">`+statuses.map(s=>`<option value="${s}" ${s===j.status?"selected":""}>${s}</option>`).join("")+`</select>`;
+    tr.innerHTML=`
+      <td class="company">${esc(j.company)}</td>
+      <td class="titlecell">${roleCell}</td>
+      <td class="muted">${esc(j.category)||"—"}</td>
+      <td class="score ${scoreClass(j.score)}">${j.score!=null?esc(""+j.score):"<span class='muted'>–</span>"}</td>
+      <td>${statusCell}</td>
+      <td class="muted">${esc(j.interest)||"—"}</td>
+      <td class="muted">${esc(j.due)||"—"}</td>
+      <td class="muted next">${esc(j.next_action)||"—"}</td>`;
+    tr.querySelector("select.status").addEventListener("change", e=>{ e.stopPropagation(); save(j,"status",e.target.value); });
+    tr.tabIndex = 0;
+    tr.addEventListener("click", e=>{
+      if(e.target.closest("a, select, input, button")) return;
+      openDrawer(j.id);
+    });
+    tr.addEventListener("keydown", e=>{
+      if(e.target.closest("a, select, input, button")) return;
+      if(e.key==="Enter" || e.key===" "){ e.preventDefault(); openDrawer(j.id); }
+    });
+    tbody.appendChild(tr);
+  }
+}
+
+function repostBadge(j){
+  if(!j.repost_of) return "";
+  const orig = roles.find(r=>r.id===j.repost_of);
+  if(!orig) return ` <span class="repost-badge" title="Repost of role #${j.repost_of}">↻ repost</span>`;
+  let tip = `Repost of #${orig.id}: ${orig.company} / ${orig.title} — ${orig.status}`;
+  if(orig.status==="ignored" && orig.decision_reason) tip += ` (${orig.decision_reason})`;
+  return ` <span class="repost-badge" title="${esc(tip)}">↻ ${esc(orig.status)}</span>`;
+}
+
+function esc(s){ return (s==null?"":""+s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function scoreClass(s){ const v=parseFloat(s); if(isNaN(v))return""; return v>=3.5?"sc-high":v>=3.0?"sc-mid":"sc-low"; }
+
+async function save(job, field, value){
+  const r=await fetch(`/api/roles/${job.id}/update`,{ method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ field, value }) });
+  const d=await r.json().catch(()=>({}));
+  if(r.ok && d.ok){ job[field]=value; toast("Saved: "+job.company);
+    if(field==="status"||field==="interest"){ updateMeta(); buildChips(); render(); } }
+  else { toast("Save failed: "+(d.error||r.status), true); load(); }
+}
+
+$("#search").addEventListener("input", e=>{ query=e.target.value; render(); });
+document.querySelectorAll("th[data-k]").forEach(th=>th.addEventListener("click",()=>{
+  const k=th.dataset.k; if(sortKey===k) sortAsc=!sortAsc; else { sortKey=k; sortAsc=(k!=="score"); } render();
+}));
+$("#scanBtn").addEventListener("click", async ()=>{
+  const btn=$("#scanBtn"), out=$("#scanOut");
+  btn.disabled=true; btn.textContent="Scanning… (1–3 min)";
+  out.style.display="block"; out.textContent="Running scan_all_companies() …";
+  try{ const r=await fetch("/api/scan",{method:"POST"}); const d=await r.json();
+    out.textContent=d.output||"(no output)"; toast(d.ok?"Scan finished":"Scan finished with errors", !d.ok); load();
+    loadScanHealth();
+  }catch(e){ out.textContent="Scan request failed: "+e; toast("Scan request failed", true); }
+  btn.disabled=false; btn.textContent="Run scan now";
+});
+
+// ---------------- Scan observability ----------------
+let lastScanRun = null;
+
+async function loadScanHealth(){
+  const r = await fetch("/api/scan_runs/latest");
+  const d = await r.json();
+  lastScanRun = d;
+  const el = $("#scanHealth");
+  if(!d.run){ el.textContent = ""; el.title = ""; return; }
+  const errCount = d.run.companies_error;
+  const errText = errCount ? `<span class="err">${errCount} error${errCount===1?"":"s"}</span>` : `${errCount} errors`;
+  el.innerHTML = `Last scan: ${esc(d.run.started_at)} · ${d.run.companies_total} providers · `
+    + `${d.run.companies_ok} clean · ${errText}`;
+  el.title = "Click for the per-company scan detail";
+}
+
+function fmtNum(n){ return `<span class="funnel-num${n===0?" zero":""}">${n}</span>`; }
+
+function openScanModal(){
+  if(!lastScanRun || !lastScanRun.run){ toast("No scan has run yet."); return; }
+  const { run, companies } = lastScanRun;
+  $("#scanModalSub").textContent = `${run.started_at} → ${run.finished_at} · ${run.trigger} · `
+    + `${run.raw_total} raw → ${run.title_matched_total} title → ${run.location_matched_total} location → `
+    + `${run.inserted_total} inserted · ${run.expired_total} expired`;
+  const body = $("#scanModalBody");
+  body.innerHTML = companies.map((c, i)=>{
+    const badge = `<span class="scan-badge ${c.outcome}">${c.outcome}</span>`
+      + (c.failing_since ? `<span class="scan-badge failing" title="Erroring since ${esc(c.failing_since)}">failing since ${esc(c.failing_since.slice(0,10))}</span>` : "");
+    const errLine = c.error_detail ? `<div class="error-detail">${esc(c.error_detail)}</div>` : "";
+    const droppedT = c.dropped_titles.length
+      ? `<button class="dropped-toggle" data-t="${i}">± ${c.dropped_titles.length} dropped title${c.dropped_titles.length===1?"":"s"}</button>
+         <div class="dropped-list" id="droppedT${i}">${c.dropped_titles.map(esc).join(", ")}</div>` : "";
+    const droppedL = c.dropped_locations.length
+      ? `<button class="dropped-toggle" data-l="${i}">± ${c.dropped_locations.length} dropped location${c.dropped_locations.length===1?"":"s"}</button>
+         <div class="dropped-list" id="droppedL${i}">${c.dropped_locations.map(esc).join(", ")}</div>` : "";
+    return `<tr class="outcome-${c.outcome}">
+      <td>${esc(c.company)}${badge?"<br>"+badge:""}${errLine}</td>
+      <td class="muted">${esc(c.portal)}</td>
+      <td>${c.outcome}</td>
+      <td>${fmtNum(c.raw_count)}</td>
+      <td>${fmtNum(c.title_matched)}${droppedT}</td>
+      <td>${fmtNum(c.location_matched)}${droppedL}</td>
+      <td>${fmtNum(c.inserted)}</td>
+    </tr>`;
+  }).join("");
+  body.querySelectorAll(".dropped-toggle").forEach(btn=>btn.addEventListener("click", ()=>{
+    const id = btn.dataset.t!==undefined ? `droppedT${btn.dataset.t}` : `droppedL${btn.dataset.l}`;
+    $("#"+id).classList.toggle("open");
+  }));
+  $("#scanScrim").classList.add("open"); $("#scanModal").classList.add("open");
+}
+function closeScanModal(){ $("#scanScrim").classList.remove("open"); $("#scanModal").classList.remove("open"); }
+$("#scanHealth").addEventListener("click", openScanModal);
+$("#scanScrim").addEventListener("click", closeScanModal);
+
+// ---------------- Role detail drawer ----------------
+let current = null;  // the role being viewed
+
+function roleById(id){ return roles.find(r=>r.id===id); }
+
+async function openDrawer(id){
+  current = roleById(id);
+  if(!current) return;
+  $("#dwTitle").textContent = current.company;
+  $("#dwSub").textContent = `${current.title} · ${current.status}` + (current.location?` · ${current.location}`:"");
+  // category selector
+  const cat = $("#dwcat");
+  cat.innerHTML = categories.map(c=>`<option ${c===current.category?"selected":""}>${c}</option>`).join("");
+  updateCatNote();
+  const intr = $("#fInterest");
+  intr.innerHTML = [["", "Undefined"]].concat(interests.map(i=>[i,i]))
+    .map(([v,label])=>`<option value="${v}" ${v===(current.interest||"")?"selected":""}>${label}</option>`).join("");
+
+  // Repost lineage: informational, always the earlier row's own status/decision.
+  const repostBlock = $("#repostBlock");
+  if(current.repost_of){
+    const orig = roleById(current.repost_of);
+    repostBlock.style.display = "";
+    if(orig){
+      let info = `Repost of #${orig.id}: ${orig.company} / ${orig.title} — ${orig.status}`;
+      if(orig.status==="ignored" && (orig.decision_reason || orig.decision_note)){
+        info += `. Declined: ${orig.decision_reason||"—"}`;
+        if(orig.decision_note) info += ` — ${orig.decision_note}`;
+      }
+      $("#repostInfo").textContent = info;
+    } else {
+      $("#repostInfo").textContent = `Repost of role #${current.repost_of} (not loaded).`;
+    }
+  } else {
+    repostBlock.style.display = "none";
+  }
+
+  // Decision memory: only meaningful once you've actually declined the role.
+  const decisionBlock = $("#decisionBlock");
+  if(current.status === "ignored"){
+    decisionBlock.style.display = "";
+    const dr = $("#fDecisionReason");
+    dr.innerHTML = [["", "—"]].concat(decisionReasons.map(r=>[r,r]))
+      .map(([v,label])=>`<option value="${v}" ${v===(current.decision_reason||"")?"selected":""}>${label}</option>`).join("");
+    $("#fDecisionNote").value = current.decision_note || "";
+  } else {
+    decisionBlock.style.display = "none";
+  }
+
+  $("#fChannel").value = current.channel || "";
+  $("#fLocation").value = current.location || "";
+  $("#fApplied").value = current.applied_date || "";
+  $("#fDue").value = current.due || "";
+  $("#fNextAction").value = current.next_action || "";
+  $("#fNotes").value = current.notes || "";
+  $("#jd").value = current.jd_text || "";
+  $("#jdSrc").textContent = current.jd_source && current.jd_source!=="none" ? `source: ${current.jd_source}` : "";
+  $("#fetchJd").style.display = current.url ? "" : "none";
+  hideJdPreview();
+  $("#genMsg").textContent = ""; $("#genMsg").className="";
+  closeViewer();
+  await loadDocs();
+  $("#scrim").classList.add("open"); $("#drawer").classList.add("open");
+}
+function closeDrawer(){ $("#scrim").classList.remove("open"); $("#drawer").classList.remove("open"); current=null; }
+function updateCatNote(){
+  const c = $("#dwcat").value;
+  $("#dwcatNote").textContent = c==="Review" ? "Review has no CV. Pick a real category to generate." : "";
+}
+
+$(".dw-close").addEventListener("click", closeDrawer);
+$("#scrim").addEventListener("click", closeDrawer);
+document.addEventListener("keydown", e=>{ if(e.key==="Escape" && current) closeDrawer(); });
+
+$("#dwcat").addEventListener("change", async e=>{
+  const v=e.target.value; updateCatNote();
+  await save(current, "category", v); current.category=v;
+  $("#dwSub").textContent = `${current.title} · ${current.status}` + (current.location?` · ${current.location}`:"");
+});
+
+document.querySelectorAll("#fInterest, #fChannel, #fLocation, #fApplied, #fDue, #fNextAction, #fNotes, #fDecisionReason, #fDecisionNote").forEach(el=>{
+  el.addEventListener("change", async e=>{
+    if(!current) return;
+    const field=e.target.dataset.field, v=e.target.value;
+    await save(current, field, v); current[field]=v;
+    render();  // table's read-only Interest/Due/Next-action cells reflect the edit
+  });
+});
+
+$("#saveJd").addEventListener("click", async ()=>{
+  const v=$("#jd").value;
+  await save(current, "jd_text", v); current.jd_text=v; current.jd_source = v?"paste":"none";
+  $("#jdSrc").textContent = v ? "source: paste" : "";
+  toast("JD saved: "+current.company);
+});
+
+function hideJdPreview(){ $("#jdPreview").style.display="none"; $("#jdPreview").dataset.fullText=""; $("#jdPreview").dataset.mismatch=""; }
+function showJdPreview(preview, fullText, chars, titleMismatch, titleCheck){
+  $("#jdPreviewMeta").textContent = `Fetched ${chars} chars. Review before saving:`;
+  $("#jdPreviewText").textContent = preview + (chars>preview.length ? " …" : "");
+  $("#jdPreview").dataset.fullText = fullText;
+  $("#jdPreview").dataset.mismatch = titleMismatch ? "1" : "";
+  const warn = $("#jdPreviewWarn"), acceptBtn = $("#jdPreviewAccept"), rejectBtn = $("#jdPreviewReject");
+  if(titleMismatch){
+    warn.style.display = "block";
+    warn.textContent = `⚠ Title mismatch: none of the role title's significant words (${titleCheck.significant_words.join(", ")}) appear in this text. Likely not a real JD.`;
+    acceptBtn.textContent = "Accept anyway (title mismatch)"; acceptBtn.classList.remove("primary");
+    rejectBtn.classList.add("primary");
+  } else {
+    warn.style.display = "none";
+    acceptBtn.textContent = "Accept: save as JD"; acceptBtn.classList.add("primary");
+    rejectBtn.classList.remove("primary");
+  }
+  $("#jdPreview").style.display = "block";
+}
+$("#jdPreviewAccept").addEventListener("click", async ()=>{
+  const text = $("#jdPreview").dataset.fullText || "";
+  const force = $("#jdPreview").dataset.mismatch === "1";
+  const r=await fetch(`/api/roles/${current.id}/fetch_jd/accept`,{method:"POST",
+    headers:{"Content-Type":"application/json"}, body:JSON.stringify({text, force})});
+  const d=await r.json();
+  if(r.ok && d.ok){
+    current.jd_text=text; current.jd_source="fetch";
+    $("#jd").value=text; $("#jdSrc").textContent="source: fetch";
+    hideJdPreview(); toast(`JD saved: ${d.jd_chars} chars`);
+  } else { toast(d.message || "Save failed: "+(d.error||r.status), true); }
+});
+$("#jdPreviewReject").addEventListener("click", ()=>{ hideJdPreview(); toast("Discarded. Paste it instead."); });
+
+$("#fetchJd").addEventListener("click", async ()=>{
+  const btn=$("#fetchJd"); btn.disabled=true; const old=btn.textContent; btn.textContent="Fetching…";
+  hideJdPreview();
+  try{
+    const r=await fetch(`/api/roles/${current.id}/fetch_jd`,{method:"POST"});
+    const d=await r.json();
+    if(r.ok && d.ok){
+      showJdPreview(d.preview, d.text, d.jd_chars, d.title_mismatch, d.title_check);
+    } else { toast(d.message||"Fetch failed. Paste it manually.", true); }
+  }catch(e){ toast("Fetch failed: "+e, true); }
+  btn.disabled=false; btn.textContent=old;
+});
+
+// ---------------- Add role manually ----------------
+function openAdd(){
+  $("#addCat").innerHTML = ['(auto)'].concat(categories).map(c=>`<option>${c}</option>`).join("");
+  ["addCompany","addTitle","addUrl","addJd"].forEach(id=>$("#"+id).value="");
+  $("#addMsg").textContent=""; $("#addMsg").className="";
+  $("#addDup").style.display="none"; $("#addPreview").style.display="none";
+  $("#addScrim").classList.add("open"); $("#addModal").classList.add("open"); $("#addCompany").focus();
+}
+function closeAdd(){ $("#addScrim").classList.remove("open"); $("#addModal").classList.remove("open"); }
+$("#addBtn").addEventListener("click", openAdd);
+$("#addCancel").addEventListener("click", closeAdd);
+$("#addScrim").addEventListener("click", closeAdd);
+
+async function submitAdd(force){
+  const company=$("#addCompany").value.trim();
+  const payload={ company, title:$("#addTitle").value.trim(),
+                  url:$("#addUrl").value.trim(), jd_text:$("#addJd").value.trim() };
+  const cat=$("#addCat").value; if(cat && cat!=="(auto)") payload.category=cat;
+  if(force) payload.force=true;
+  const msg=$("#addMsg"); msg.className="";
+  if(!company){ msg.className="err"; msg.textContent="Company is required."; return; }
+  if(!payload.url && !payload.jd_text){ msg.className="err"; msg.textContent="Give a URL or paste the JD."; return; }
+  $("#addSubmit").disabled=true; $("#addDup").style.display="none";
+  msg.textContent = payload.jd_text ? "Adding…" : "Adding + checking the URL…";
+  try{
+    const r=await fetch("/api/roles",{ method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload) });
+    const d=await r.json();
+    if(r.ok && d.ok){
+      msg.textContent="";
+      if(d.fetch_preview){
+        showAddPreview(d.role_id, company, d.fetch_preview);
+      } else {
+        closeAdd(); await load();
+        const note = d.jd_source==="paste" ? "JD pasted." : "No JD yet, paste it in the role.";
+        toast(`Added ${company}. ${note}`);
+        openDrawer(d.role_id);
+      }
+    } else if(r.status===409 && d.error==="duplicate"){
+      msg.textContent="";
+      showAddDup(d.duplicate);
+    } else { msg.className="err"; msg.textContent=d.message||d.error||("HTTP "+r.status); }
+  }catch(e){ msg.className="err"; msg.textContent="Failed: "+e; }
+  $("#addSubmit").disabled=false;
+}
+$("#addSubmit").addEventListener("click", ()=>submitAdd(false));
+
+function showAddDup(dup){
+  $("#addDup").dataset.roleId = dup.id;
+  $("#addDupText").textContent = `Looks like a duplicate of role ${dup.id}: ${dup.company} / ${dup.title||"(no title)"}`
+    + (dup.location ? ` · ${dup.location}` : "") + ` · ${dup.status}.`;
+  $("#addDup").style.display="block";
+}
+$("#addDupOpen").addEventListener("click", async ()=>{
+  const id=Number($("#addDup").dataset.roleId);
+  closeAdd(); await load(); openDrawer(id);
+});
+$("#addDupForce").addEventListener("click", ()=>submitAdd(true));
+
+function showAddPreview(roleId, company, preview){
+  $("#addPreview").dataset.roleId = roleId;
+  $("#addPreview").dataset.fullText = preview.text;
+  $("#addPreview").dataset.company = company;
+  $("#addPreview").dataset.mismatch = preview.title_mismatch ? "1" : "";
+  $("#addPreviewMeta").textContent = `Fetched ${preview.chars} chars. Review before saving:`;
+  $("#addPreviewText").textContent = preview.preview + (preview.chars>preview.preview.length ? " …" : "");
+  const warn = $("#addPreviewWarn"), acceptBtn = $("#addPreviewAccept"), rejectBtn = $("#addPreviewReject");
+  if(preview.title_mismatch){
+    warn.style.display = "block";
+    warn.textContent = `⚠ Title mismatch: none of the role title's significant words (${preview.title_check.significant_words.join(", ")}) appear in this text. Likely not a real JD.`;
+    acceptBtn.textContent = "Accept anyway (title mismatch)"; acceptBtn.classList.remove("primary");
+    rejectBtn.classList.add("primary");
+  } else {
+    warn.style.display = "none";
+    acceptBtn.textContent = "Accept: save as JD"; acceptBtn.classList.add("primary");
+    rejectBtn.classList.remove("primary");
+  }
+  $("#addPreview").style.display="block";
+}
+$("#addPreviewAccept").addEventListener("click", async ()=>{
+  const roleId=$("#addPreview").dataset.roleId, text=$("#addPreview").dataset.fullText, company=$("#addPreview").dataset.company;
+  const force = $("#addPreview").dataset.mismatch === "1";
+  const r=await fetch(`/api/roles/${roleId}/fetch_jd/accept`,{method:"POST",
+    headers:{"Content-Type":"application/json"}, body:JSON.stringify({text, force})});
+  const d=await r.json();
+  closeAdd(); await load();
+  toast(r.ok && d.ok ? `Added ${company}. JD fetched (${d.jd_chars} chars).`
+                      : "Add saved, but JD save failed: "+(d.message||d.error||r.status), !(r.ok && d.ok));
+  openDrawer(roleId);
+});
+$("#addPreviewReject").addEventListener("click", async ()=>{
+  const roleId=$("#addPreview").dataset.roleId, company=$("#addPreview").dataset.company;
+  closeAdd(); await load();
+  toast(`Added ${company}. No JD yet, paste it in the role.`);
+  openDrawer(roleId);
+});
+
+async function loadDocs(){
+  const r = await fetch(`/api/roles/${current.id}/documents`); const d = await r.json();
+  const box = $("#docs");
+  const docs = d.documents||[];
+  if(!docs.length){ box.innerHTML='<span class="muted">None yet.</span>'; return; }
+  box.innerHTML="";
+  for(const doc of docs){
+    const el=document.createElement("div"); el.className="doc";
+    const label = doc.doc_type==="cv"?"CV":"Cover letter";
+    const langOverridden = doc.language_gate_overridden ? " (overridden)" : "";
+    const langBadge = doc.language_gate_verdict && doc.language_gate_verdict!=="clear"
+      ? `<span class="badge lang-${doc.language_gate_verdict}" title="Language gate${langOverridden}">lang: ${doc.language_gate_verdict}${langOverridden}</span>`
+      : "";
+    el.innerHTML=`<span class="grow">${label} <span class="muted">v${doc.version} · ${esc(doc.model)}</span></span>
+      ${langBadge}
+      <span class="badge ${doc.status}">${doc.status}</span>
+      <button class="btn" data-act="view">View</button>`;
+    el.querySelector('[data-act="view"]').addEventListener("click", ()=>viewDoc(doc.id));
+    box.appendChild(el);
+  }
+}
+
+async function downloadDoc(docId, btn){
+  btn.disabled=true; const old=btn.textContent; btn.textContent="Preparing…";
+  try{
+    const r=await fetch(`/api/documents/${docId}/download`);
+    if(!r.ok){
+      const d=await r.json().catch(()=>({}));
+      toast(d.message||"Download failed", true);
+    } else {
+      const blob=await r.blob();
+      const url=URL.createObjectURL(blob);
+      const cd=r.headers.get("Content-Disposition")||"";
+      const m=cd.match(/filename="?([^"]+)"?/);
+      const a=document.createElement("a");
+      a.href=url; a.download=m?m[1]:`document-${docId}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    }
+  }catch(e){ toast("Download failed: "+e, true); }
+  btn.disabled=false; btn.textContent=old;
+}
+
+let viewerState = null; // { doc, showingRaw }
+
+function closeViewer(){
+  $("#viewer").style.display="none";
+  $("#viewerFrame").src=""; $("#viewerFrame").style.display="none";
+  $("#viewerText").style.display="none";
+  viewerState = null;
+}
+
+async function viewDoc(docId){
+  const r = await fetch(`/api/documents/${docId}`);
+  const doc = await r.json();
+  viewerState = { doc, showingRaw: false };
+  renderViewer();
+  $("#viewer").scrollIntoView({behavior:"smooth", block:"nearest"});
+}
+
+function renderViewer(){
+  if(!viewerState) return;
+  const { doc, showingRaw } = viewerState;
+  const label = doc.doc_type==="cv" ? "CV" : "Cover letter";
+  const hasStructured = doc.doc_type==="cv" && !!doc.content_json;   // styled render available
+  const legacyCv = doc.doc_type==="cv" && !doc.content_json;         // predates content_json — text only, no PDF
+
+  $("#viewerMeta").textContent = `${label} v${doc.version} · ${esc(doc.model)} · ${doc.status}`;
+
+  let fidelity=null; try{ fidelity = doc.critic_notes ? JSON.parse(doc.critic_notes) : null; }catch(e){}
+  const fidEl = $("#viewerFidelity");
+  const fidParts=[];
+  if(fidelity && fidelity.flags && fidelity.flags.length) fidParts.push(`${fidelity.flags.length} flag${fidelity.flags.length===1?"":"s"}`);
+  if(fidelity && fidelity.gaps && fidelity.gaps.length) fidParts.push(`${fidelity.gaps.length} gap${fidelity.gaps.length===1?"":"s"}`);
+  if(fidelity && fidelity.repairs && fidelity.repairs.length) fidParts.push(`${fidelity.repairs.length} auto-repaired`);
+  fidEl.textContent = fidParts.join(" · ");
+
+  const langGate = fidelity && fidelity.language_gate;
+  const langEl = $("#viewerLangGate");
+  langEl.className = "";
+  if(langGate && langGate.verdict !== "clear"){
+    const n = (langGate.block||[]).length + (langGate.warn||[]).length;
+    const overridden = langGate.overridden ? ", overridden" : "";
+    langEl.textContent = `language: ${langGate.verdict} (${n}${overridden})`;
+    langEl.className = langGate.verdict === "block" ? "lang-block" : "lang-warn-text";
+  } else {
+    langEl.textContent = "";
+  }
+
+  const apBtn=$("#viewerApproveBtn");
+  if(doc.status==="draft"){
+    apBtn.style.display="";
+    apBtn.onclick = async ()=>{
+      await fetch(`/api/documents/${doc.id}/approve`,{method:"POST"});
+      toast("Approved");
+      doc.status="approved";
+      renderViewer();
+      loadDocs();
+    };
+  } else {
+    apBtn.style.display="none";
+  }
+
+  const dlBtn=$("#viewerDownloadBtn"), note=$("#viewerNote");
+  if(legacyCv){
+    dlBtn.style.display="none";
+    note.style.display="block";
+    note.textContent="This CV predates structured content. Regenerate it to get a styled render and a PDF.";
+  } else {
+    note.style.display="none";
+    dlBtn.style.display="";
+    dlBtn.onclick = ()=>downloadDoc(doc.id, dlBtn);
+  }
+
+  const rawBtn=$("#viewerRawBtn");
+  if(hasStructured){
+    rawBtn.style.display="";
+    rawBtn.textContent = showingRaw ? "View styled" : "View raw JSON";
+    rawBtn.onclick = ()=>{ viewerState.showingRaw = !viewerState.showingRaw; renderViewer(); };
+  } else {
+    rawBtn.style.display="none";
+  }
+
+  const frame=$("#viewerFrame"), text=$("#viewerText");
+  if(hasStructured && !showingRaw){
+    text.style.display="none";
+    frame.style.display="block";
+    frame.src=`/api/documents/${doc.id}/preview`;
+  } else if(hasStructured && showingRaw){
+    frame.style.display="none"; frame.src="";
+    text.style.display="block";
+    text.textContent = JSON.stringify(JSON.parse(doc.content_json), null, 2) + fidelityDetailText(fidelity);
+  } else {
+    frame.style.display="none"; frame.src="";
+    text.style.display="block";
+    text.textContent = (doc.content_md || "(empty)") + fidelityDetailText(fidelity);
+  }
+
+  $("#viewer").style.display="block";
+}
+
+function fidelityDetailText(fidelity){
+  const hasRepairs = fidelity && fidelity.repairs && fidelity.repairs.length;
+  const lg = fidelity && fidelity.language_gate;
+  const hasLangGate = lg && lg.verdict !== "clear";
+  if(!fidelity || !(fidelity.flags.length || fidelity.gaps.length || fidelity.master_cv_file || hasRepairs || hasLangGate)) return "";
+  let out = "\n\n---\nSOURCE-FIDELITY CHECK (advisory, does not block approval)\n";
+  if(fidelity.master_cv_file) out += `  sourced from: ${fidelity.master_cv_file} (sha256 ${fidelity.master_cv_sha256.slice(0,12)}…)\n`;
+  if(hasRepairs){
+    out += `  ⚠ auto-repaired ${fidelity.repairs.length} field(s). Model returned a malformed shape, recovered deterministically:\n`;
+    out += fidelity.repairs.map(r=>`      [${r.shape}] ${r.field}: recovered ${r.recovered} item(s)`).join("\n") + "\n";
+  }
+  if(fidelity.flags.length) out += fidelity.flags.map(f=>`  [${f.kind}] not found in master CV: ${f.text}`).join("\n") + "\n";
+  if(fidelity.gaps.length) out += fidelity.gaps.map(g=>`  ${g}`).join("\n") + "\n";
+  if(hasLangGate){
+    out += `\n---\nLANGUAGE GATE${lg.overridden?" (overridden)":""}\n`;
+    for(const e of (lg.block||[])) out += `  [BLOCK] ${e.language}${e.level?" "+e.level:""} — "${e.excerpt}" (${e.source})\n`;
+    for(const e of (lg.warn||[])) out += `  [WARN]  ${e.language} ${e.level||""} required, declared level lower — "${e.excerpt}"\n`;
+    for(const e of (lg.note||[])) out += `  [note]  ${e.kind} ${e.language} — "${e.excerpt}"\n`;
+  }
+  return out;
+}
+
+async function runGenerate(doc_types, overrideLangGate){
+  const buttons=document.querySelectorAll(".dw-row [data-doc]");
+  buttons.forEach(b=>b.disabled=true);
+  const msg=$("#genMsg"); msg.className=""; msg.textContent="Drafting… (Sonnet 5, ~20–40s)";
+  try{
+    const payload = overrideLangGate ? {doc_types, override_language_gate:true} : {doc_types};
+    const r=await fetch(`/api/roles/${current.id}/generate`,{ method:"POST",
+      headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload) });
+    const d=await r.json();
+    if(r.ok && d.ok){
+      const cost=d.documents.reduce((s,x)=>s+(x.cost_usd||0),0);
+      const trunc=d.documents.some(x=>x.truncated);
+      const flags=d.documents.reduce((s,x)=>s+(x.fidelity_flags||0),0);
+      const overridden=d.documents.some(x=>x.language_gate_overridden);
+      msg.className="";
+      msg.textContent=`Done: ${d.documents.length} draft(s), $${cost.toFixed(4)}`
+        + (trunc?" (⚠ truncated, regen)":"") + (flags?` · ${flags} fidelity flag(s), see below`:"")
+        + (overridden?" · language gate overridden":"");
+      await loadDocs();
+      viewDoc(d.documents[d.documents.length-1].id);
+    } else if(d.error === "language_gate_block"){
+      msg.className="err";
+      const reqs = d.block.map(e=>`${esc(e.language)}${e.level?" "+esc(e.level):""} — "${esc(e.excerpt)}"`).join("; ");
+      msg.innerHTML = `Blocked by language gate: ${reqs} `
+        + `<button class="btn" id="langDeclineBtn" style="margin-left:6px">Decline</button> `
+        + `<button class="btn" id="langOverrideBtn">Override &amp; generate anyway</button>`;
+      $("#langDeclineBtn").addEventListener("click", async ()=>{
+        const rr = await fetch(`/api/roles/${current.id}/language_gate/decline`, {method:"POST"});
+        const dd = await rr.json();
+        if(rr.ok && dd.ok){
+          toast(`Declined: ${current.company}`);
+          const id = current.id;
+          await load();
+          openDrawer(id);
+        } else { toast("Decline failed: "+(dd.error||rr.status), true); }
+      });
+      $("#langOverrideBtn").addEventListener("click", ()=>runGenerate(doc_types, true));
+    } else {
+      msg.className="err"; msg.textContent = d.message || d.error || ("HTTP "+r.status);
+    }
+  }catch(e){ msg.className="err"; msg.textContent="Request failed: "+e; }
+  buttons.forEach(b=>b.disabled=false);
+}
+
+document.querySelectorAll(".dw-row [data-doc]").forEach(btn=>{
+  btn.addEventListener("click", ()=>{
+    if(!current) return;
+    const which=btn.dataset.doc;
+    const doc_types = which==="both" ? ["cv","cover_letter"] : [which];
+    runGenerate(doc_types, false);
+  });
+});
+
+load();
+loadScanHealth();
+</script>
+</body>
+</html>
