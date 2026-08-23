@@ -47,3 +47,28 @@ def test_full_app_exercise_leaves_real_cockpit_db_untouched():
 
     after = _hash(REAL_DB_PATH)
     assert before == after, "the real cockpit.db changed during an isolated test run"
+
+
+def test_before_request_creates_schema_on_a_never_initialized_db(tmp_path, monkeypatch):
+    """The gap this guards: if app.app is ever served without main() having
+    called init_db() first (a WSGI server that imports app.app directly and
+    never runs main()), the first DB-touching request used to 500 with "no
+    such table" instead of the schema just existing — see app.py's
+    _ensure_db_ready. Point DB_PATH at a file that has genuinely never been
+    initialized (conftest's own isolated_db fixture already calls init_db()
+    on its temp DB, which would mask this if reused here) and confirm a
+    fresh process's first request creates the schema itself, no main()
+    required."""
+    never_initialized = tmp_path / "genuinely_fresh.db"
+    monkeypatch.setattr(dbmod, "DB_PATH", never_initialized)
+    monkeypatch.setattr(app, "_db_ready", False)
+    assert not never_initialized.exists()
+
+    client = app.app.test_client()
+    r = client.get("/api/roles")
+    assert r.status_code == 200, r.get_json()
+
+    conn = sqlite3.connect(never_initialized)
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    conn.close()
+    assert "roles" in tables

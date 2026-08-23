@@ -44,6 +44,24 @@ APPLICATIONS_DIR = Path(__file__).parent / "applications"
 
 app = Flask(__name__)
 
+# Schema creation used to happen only in main(), before app.run() — fine for
+# `python3 app.py`, but silent data-loss-by-500 for any other way of serving
+# this app (a WSGI server that imports `app.app` directly and never calls
+# main()): the first DB-touching route would fail with "no such table"
+# instead of the schema just existing. Guaranteed here instead, on the first
+# request through any path — cheap (one flag check) on every request after
+# that. init_db() itself is idempotent (CREATE TABLE IF NOT EXISTS), so
+# main() below still calling it too is harmless, not a second source of truth.
+_db_ready = False
+
+
+@app.before_request
+def _ensure_db_ready():
+    global _db_ready
+    if not _db_ready:
+        dbmod.init_db()
+        _db_ready = True
+
 
 # ------------------------------------------------------------------
 # Roles
