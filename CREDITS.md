@@ -6,7 +6,7 @@ explicit and doesn't have to be re-derived later.
 
 ## Pending — not yet cleared
 
-### Greg [surname] — Cybersecurity AI PM Scanner, five provider handlers
+### Greg Nudleman — Cybersecurity AI PM Scanner, five provider handlers
 **Where:** `job_scanner.py`
 **Source:** a personal job scanner Greg wrote for his own cybersecurity/AI PM
 search and gave directly to the author — not a public repository, no license
