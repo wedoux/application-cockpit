@@ -2,75 +2,209 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Application cockpit — Swiss Arc</title>
+<title>Application cockpit · Swiss Arc</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   :root {
     --bg: #11141a; --panel: #181c25; --row: #1c212c; --row-hover: #232a38;
     --text: #e6e9f0; --muted: #8b93a7; --line: #2a3140; --accent: #6ea8fe;
+    --accent-text: #0c1220;
     --sourced: #f5b83d; --reviewing: #b48ef5; --drafted: #6ea8fe;
     --submitted: #46c7c7; --interview: #4cc38a; --offer: #7bd88f;
-    --rejected: #e5654c; --ignored: #6b7388; --expired: #6b7388;
+    --rejected: #e5654c; --ignored: #878ea1; --expired: #878ea1;
+    /* Border tints per status — hand-tuned darkened variants of the status
+       colors above, dark-mode-specific and unrelated to the base palette by
+       any formula, so they're their own tokens rather than derived. */
+    --sourced-border: #5a4a20; --reviewing-border: #4a3a6a; --drafted-border: #2e4a7a;
+    --submitted-border: #1f5252; --interview-border: #2e5a3a; --offer-border: #2e5a3a;
+    --rejected-border: #5a2020; --rejected-border-2: #5a2e26;
+    --warn-text: #ffb4a6;
+    --doc-frame-bg: #fff; /* the PDF preview iframe — deliberately white paper in both themes */
+    /* The one focus indicator, everywhere. Composed from --accent so it's
+       already theme-correct without its own light-mode override below —
+       aimed at 2.4.11 (Focus Appearance), not just scraping past 2.4.7:
+       a real outline plus an offset, not a 1px border-color nudge that's
+       "a change" on paper and invisible in practice. A future element
+       reaches for this token instead of copying an old outline:none rule. */
+    --focus-ring: 2px solid var(--accent);
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f7fa; --panel: #ffffff; --row: #eef0f4; --row-hover: #e4e7ee;
+      --text: #1a1d24; --muted: #5b6472; --line: #d7dce4; --accent: #2f6fed;
+      --accent-text: #ffffff;
+      --sourced: #8d6007; --reviewing: #6314eb; --drafted: #015fe9;
+      --submitted: #237474; --interview: #287751; --offer: #247836;
+      --rejected: #c0361b; --ignored: #62697c; --expired: #62697c;
+      --sourced-border: #e8c98a; --reviewing-border: #d9c9f5; --drafted-border: #bfd4fb;
+      --submitted-border: #a9dede; --interview-border: #a6e0bd; --offer-border: #a6e0bd;
+      --rejected-border: #f1b8ac; --rejected-border-2: #f1b8ac;
+      --warn-text: #a02a10;
+      --doc-frame-bg: #fff;
+    }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
          font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif; }
-  header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; padding: 22px 28px 14px; }
-  h1 { font-size: 17px; font-weight: 650; margin: 0; letter-spacing: .2px; }
-  #meta { color: var(--muted); font-size: 12.5px; }
-  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 0 28px 16px; }
-  .chip { border: 1px solid var(--line); background: var(--panel); color: var(--muted);
-          border-radius: 999px; padding: 4px 13px; cursor: pointer; font-size: 12.5px; white-space: nowrap; }
-  .chip.active { color: var(--text); border-color: var(--accent); }
-  .chip b { color: var(--text); font-weight: 600; margin-left: 2px; }
-  .chip .swatch { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:6px; vertical-align: middle; }
+  /* Sticky stack: header, then the scan-status line (NOT sticky — it scrolls
+     away under the stack below, by design), then the filter toolbar, then
+     the table's own header row. Each sticky layer's `top` offset is the
+     measured height of whatever sticks above it — set as --header-h /
+     --toolbar-h custom properties by JS on load/resize, not guessed pixel
+     values, since padding/wrapping/font metrics make a hardcoded guess
+     fragile the moment either row wraps to two lines at a narrow width. */
+  .app-header { position: sticky; top: 0; z-index: 30; display: flex; align-items: center;
+                gap: 16px; flex-wrap: wrap; padding: 18px 28px; background: var(--bg);
+                border-bottom: 1px solid var(--line); }
+  /* Widened on purpose: everything used to sit in an 11.5-17px band and
+     nothing led. Title now clearly leads; status-bar metadata drops below
+     the rest of the UI's body text, not just recolored but sized down, so
+     it reads as secondary rather than merely dim. */
+  h1 { font-size: 23px; font-weight: 700; margin: 0; letter-spacing: -.1px; }
+  .header-actions { display: flex; gap: 8px; align-items: center; margin-left: auto; }
+  .scan-status-bar { padding: 12px 28px 0; display: flex; align-items: baseline; gap: 14px;
+                      flex-wrap: wrap; text-align: left; }
+  #scanHealth, #meta { color: var(--muted); font-size: 11.5px; font-weight: 400; }
+  .toolbar { position: sticky; top: var(--header-h, 58px); z-index: 29; background: var(--bg);
+             display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 14px 28px 16px; }
+  .segmented { display: inline-flex; border: 1px solid var(--line); border-radius: 8px;
+               background: var(--panel); padding: 2px; gap: 2px; flex-wrap: wrap; }
+  .seg-btn { border: 0; background: transparent; color: var(--muted); border-radius: 6px;
+             padding: 5px 12px; cursor: pointer; font-size: 12.5px; white-space: nowrap;
+             font: inherit; }
+  .seg-btn.active { color: var(--text); background: var(--row); }
+  .seg-btn:focus-visible { outline: var(--focus-ring); outline-offset: -2px; }
+  .seg-btn b { color: var(--text); font-weight: 600; margin-left: 2px; }
+  .seg-btn .swatch { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:6px; vertical-align: middle; }
   #search { margin-left: auto; background: var(--panel); border: 1px solid var(--line); color: var(--text);
             border-radius: 8px; padding: 6px 12px; width: 220px; outline: none; }
   #search:focus { border-color: var(--accent); }
-  #scanBtn { background: var(--accent); color: #0c1220; border: 0; border-radius: 8px;
-             padding: 7px 16px; font-weight: 600; cursor: pointer; }
+  #search:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+  /* Two separate causes, both fixed: border: 0 vs 1px solid was the first
+     (a real border occupies box space regardless of color, even with
+     border-box), fixed below with a matching transparent border. The
+     second only showed up after that fix — <button> gets line-height:
+     normal from the browser's own default stylesheet, not the body's
+     inherited 1.45, and "normal" is font-metric-dependent: at the same
+     13px font-size, weight 600 (this button) and weight 400 (the other
+     two) computed genuinely different line heights in this font stack.
+     An explicit height sidesteps relying on font-metric-derived "normal"
+     entirely, same as #settingsBtn already does below. */
+  #scanBtn { background: var(--accent); color: var(--accent-text); border: 1px solid transparent;
+             border-radius: 8px; padding: 0 16px; height: 34px; font-weight: 600; cursor: pointer;
+             font-size: 13px; }
   #scanBtn:disabled { opacity: .5; cursor: wait; }
-  main { padding: 0 28px 48px; }
-  table { width: 100%; border-collapse: collapse; }
-  th { text-align: left; color: var(--muted); font-size: 11.5px; text-transform: uppercase;
+  #settingsBtn { background: var(--panel); border: 1px solid var(--line); color: var(--text);
+                 border-radius: 8px; width: 34px; height: 34px; cursor: pointer; font-size: 15px;
+                 line-height: 1; display: flex; align-items: center; justify-content: center; }
+  #settingsBtn:hover { border-color: var(--accent); }
+  main { padding: 20px 28px 48px; }
+  /* The table sits on --panel, a distinct surface from the page's --bg —
+     in light mode those two used to be near-identical (#fff row content on
+     an #f6f7fa page you could barely tell apart) and the table read as
+     floating rather than placed. Dark mode already had enough separation
+     without this, but the treatment is harmless there too (--panel is
+     already a real step up from --bg), so it applies to both rather than
+     branching per theme. */
+  /* overflow: hidden here (the obvious way to clip content to the rounded
+     corners) breaks position: sticky on the thead th below — any ancestor
+     with overflow other than visible becomes the sticky element's
+     containing block for scroll purposes, and this wrapper never scrolls
+     itself, so the header would stop sticking to the viewport entirely.
+     Confirmed by breaking it, then fixing it. No clip, so corners are
+     visual only (border-radius on the wrapper, not enforced on the table's
+     own content) — an acceptable trade since th/table never paint a
+     background that conflicts with --panel anyway. */
+  .table-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+  /* separate + 0 spacing, not collapse: border-radius on individual cells is
+     unreliable under border-collapse (the collapsed-border algorithm doesn't
+     consistently respect it across browsers). The corner cells below get the
+     card's own radius applied directly, since clipping the card itself via
+     overflow:hidden is what broke the sticky header last time. */
+  /* Explicit widths, not auto-sized to content: a column's width used to be
+     whatever its longest current cell happened to need, so it silently
+     reflowed every time the data changed. Fixed proportions (see the
+     <colgroup> in the HTML) stop that regardless of what any cell holds. */
+  /* Scoped to #tbl (the roles table) specifically — a bare `table`/`th`
+     selector here also matched the scan-report modal's own table, forcing
+     table-layout:fixed onto it with no colgroup and, worse, making its
+     thead sticky relative to the modal's own overflow:auto container,
+     which detached the header mid-scroll. Found rendering a scan-report
+     screenshot; #scanModal already has its own table/th rules below. */
+  #tbl { width: 100%; table-layout: fixed; border-collapse: separate; border-spacing: 0; }
+  td.titlecell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #tbl thead th:first-child { border-top-left-radius: 12px; }
+  #tbl thead th:last-child { border-top-right-radius: 12px; }
+  #tbl tbody tr:last-child td:first-child { border-bottom-left-radius: 12px; }
+  #tbl tbody tr:last-child td:last-child { border-bottom-right-radius: 12px; }
+  #tbl th { text-align: left; color: var(--muted); font-size: 11.5px; text-transform: uppercase;
        letter-spacing: .6px; font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line);
-       cursor: pointer; user-select: none; white-space: nowrap; }
+       cursor: pointer; user-select: none; white-space: nowrap;
+       position: sticky; top: calc(var(--header-h, 58px) + var(--toolbar-h, 62px)); z-index: 28;
+       background: var(--panel); }
   th .arrow { color: var(--accent); }
-  td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  tbody tr { cursor: pointer; }
-  tbody tr:hover { background: var(--row-hover); }
-  tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  /* Scoped to #tbl for the same reason as the block above — a bare `td`/
+     `tbody tr` selector here also clipped the scan-report modal's own
+     rows (its dropped-titles list needs to wrap, not truncate) and gave
+     its non-clickable rows a pointer cursor and hover highlight. */
+  #tbl td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle;
+       height: 40px; box-sizing: border-box; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #tbl tbody tr { cursor: pointer; }
+  #tbl tbody tr:hover { background: var(--row-hover); }
+  #tbl tbody tr:focus-visible { outline: var(--focus-ring); outline-offset: -2px; }
+  /* Strikethrough dropped — the badge already names the exact status, and
+     stacked with the link's own dotted underline it was two line
+     treatments under the same text. Color alone (here, and on the td rule
+     below) is the row-level signal now; the link's own color rule is more
+     specific than inheriting from its parent td, so it needs restating
+     here or a closed role's title would stay full-strength. */
   tr.s-rejected td.titlecell a, tr.s-rejected td.titlecell span,
   tr.s-expired td.titlecell a, tr.s-expired td.titlecell span,
-  tr.s-ignored td.titlecell a, tr.s-ignored td.titlecell span { text-decoration: line-through; color: var(--muted); }
+  tr.s-ignored td.titlecell a, tr.s-ignored td.titlecell span { color: var(--muted); }
   tr.s-rejected td, tr.s-expired td, tr.s-ignored td { color: var(--muted); }
   td.company { font-weight: 600; white-space: nowrap; }
   a { color: var(--text); text-decoration: none; border-bottom: 1px dotted var(--muted); }
   a:hover { color: var(--accent); border-color: var(--accent); }
   .muted { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
   .score { font-variant-numeric: tabular-nums; font-weight: 600; }
-  .sc-high { color: #7bd88f; } .sc-mid { color: #f5b83d; } .sc-low { color: var(--muted); }
-  select.status { background: var(--row); border: 1px solid var(--line); border-radius: 6px;
-                  padding: 3px 6px; font-size: 12px; text-transform: capitalize; outline: none; }
-  select.v-sourced { color: var(--sourced); border-color: #5a4a20; }
-  select.v-reviewing { color: var(--reviewing); border-color: #4a3a6a; }
-  select.v-drafted { color: var(--drafted); border-color: #2e4a7a; }
-  select.v-submitted { color: var(--submitted); border-color: #1f5252; }
-  select.v-interview { color: var(--interview); border-color: #2e5a3a; }
-  select.v-offer { color: var(--offer); border-color: #2e5a3a; }
-  select.v-rejected { color: var(--rejected); border-color: #5a2e26; }
+  .sc-high { color: var(--offer); } .sc-mid { color: var(--sourced); } .sc-low { color: var(--muted); }
+  /* Badge by default — a status is read far more than it's changed, and eight
+     native selects with eight chevrons in one screen is chrome nobody needs
+     until they're actually about to change one. Hover or focus expands it
+     into the full control, chevron included; :focus (not :focus-within —
+     select has no children to be "within") guarantees keyboard Tab reveals
+     it exactly like a mouse hover would, so nothing here ever leaves the
+     tab order or hides behind a hover-only affordance. */
+  select.status { appearance: none; -webkit-appearance: none; background: var(--row);
+                  border: 1px solid var(--line); border-radius: 999px;
+                  padding: 3px 11px; font-size: 11.5px; text-transform: capitalize;
+                  outline: none; cursor: pointer; }
+  tr:hover select.status, select.status:hover, select.status:focus {
+    border-radius: 6px; padding: 3px 22px 3px 8px; font-size: 12px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6'%3E%3Cpath d='M1 1l3.5 3.5L8 1' stroke='%238b93a7' stroke-width='1.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 8px center;
+  }
+  select.status:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+  select.v-sourced { color: var(--sourced); border-color: var(--sourced-border); }
+  select.v-reviewing { color: var(--reviewing); border-color: var(--reviewing-border); }
+  select.v-drafted { color: var(--drafted); border-color: var(--drafted-border); }
+  select.v-submitted { color: var(--submitted); border-color: var(--submitted-border); }
+  select.v-interview { color: var(--interview); border-color: var(--interview-border); }
+  select.v-offer { color: var(--offer); border-color: var(--offer-border); }
+  select.v-rejected { color: var(--rejected); border-color: var(--rejected-border-2); }
   select.v-ignored, select.v-expired { color: var(--ignored); border-color: var(--line); }
   input.edit { background: var(--row); border: 1px solid transparent; color: var(--text);
                border-radius: 6px; padding: 4px 7px; font-size: 12.5px; width: 100%; outline: none; }
   input.edit:hover { border-color: var(--line); }
   input.edit:focus { border-color: var(--accent); background: var(--panel); }
-  td.next { max-width: 220px; white-space: normal; overflow-wrap: break-word; }
+  input.edit:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+  td.next { max-width: 240px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #empty { padding: 60px 0; text-align: center; color: var(--muted); }
   #toast { position: fixed; bottom: 24px; right: 28px; background: var(--panel); border: 1px solid var(--line);
            border-radius: 10px; padding: 10px 18px; opacity: 0; transition: opacity .25s;
            pointer-events: none; font-size: 13px; }
   #toast.show { opacity: 1; }
-  #toast.err { border-color: var(--rejected); color: #ffb4a6; }
+  #toast.err { border-color: var(--rejected); color: var(--warn-text); }
   #scanOut { display: none; margin: 14px 0 0; background: var(--panel); border: 1px solid var(--line);
              border-radius: 10px; padding: 14px 18px; white-space: pre-wrap;
              font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace; color: var(--muted);
@@ -103,42 +237,46 @@
             box-sizing: border-box; }
   #fNotes:hover { border-color: var(--line); }
   #fNotes:focus { border-color: var(--accent); background: var(--panel); }
+  #fNotes:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
   #jd { width: 100%; min-height: 150px; resize: vertical; background: var(--panel); border: 1px solid var(--line);
         color: var(--text); border-radius: 8px; padding: 10px 12px; font: 12.5px/1.5 inherit; outline: none; }
   #jd:focus { border-color: var(--accent); }
+  #jd:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
   .btn { background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 8px;
          padding: 7px 14px; cursor: pointer; font-size: 13px; }
   .btn:hover { border-color: var(--accent); }
-  .btn.primary { background: var(--accent); color: #0c1220; border: 0; font-weight: 600; }
+  .btn.primary { background: var(--accent); color: var(--accent-text); border: 0; font-weight: 600; }
   .btn:disabled { opacity: .5; cursor: wait; }
   select#dwcat { background: var(--panel); border: 1px solid var(--line); color: var(--text);
                  border-radius: 8px; padding: 6px 10px; font-size: 13px; outline: none; }
+  select#dwcat:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
   .doc { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line);
          border-radius: 8px; margin-bottom: 6px; font-size: 12.5px; }
   .doc .grow { flex: 1; }
   .doc .badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); }
-  .doc .badge.approved { color: var(--offer); border-color: #2e5a3a; }
-  .doc .badge.draft { color: var(--sourced); border-color: #5a4a20; }
-  .doc .badge.lang-block { color: var(--rejected); border-color: #5a2020; }
-  .doc .badge.lang-warn { color: var(--sourced); border-color: #5a4a20; }
+  .doc .badge.approved { color: var(--offer); border-color: var(--offer-border); }
+  .doc .badge.draft { color: var(--sourced); border-color: var(--sourced-border); }
+  .doc .badge.lang-block { color: var(--rejected); border-color: var(--rejected-border); }
+  .doc .badge.lang-warn { color: var(--sourced); border-color: var(--sourced-border); }
   #viewerLangGate.lang-block { color: var(--rejected); }
   #viewerLangGate.lang-warn-text { color: var(--sourced); }
-  .title-mismatch-warn { color: #ffb4a6; border: 1px solid #5a2020; border-radius: 6px;
+  .title-mismatch-warn { color: var(--warn-text); border: 1px solid var(--rejected-border); border-radius: 6px;
                           padding: 6px 10px; margin-bottom: 8px; font-size: 12.5px; }
   .repost-badge { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line);
                    color: var(--muted); margin-left: 6px; white-space: nowrap; cursor: help; }
   #repostInfo { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 4px; }
   #viewer { display: none; margin-top: 14px; }
+  #viewerBar { margin-bottom: 12px; }
   #viewerNote { display: none; margin-bottom: 10px; }
   #viewerFrame { display: none; width: 100%; height: 60vh; border: 1px solid var(--line);
-                 border-radius: 10px; background: #fff; }
+                 border-radius: 10px; background: var(--doc-frame-bg); }
   #viewerText { display: none; margin: 0; background: var(--panel); border: 1px solid var(--line);
                 border-radius: 10px; padding: 16px 18px; white-space: pre-wrap; font: 13px/1.6 inherit;
                 color: var(--text); max-height: 46vh; overflow: auto; }
   #genMsg { color: var(--muted); font-size: 12.5px; margin-left: 4px; }
-  #genMsg.err { color: #ffb4a6; }
+  #genMsg.err { color: var(--warn-text); }
   #addBtn { background: var(--panel); border: 1px solid var(--line); color: var(--text);
-            border-radius: 8px; padding: 7px 14px; cursor: pointer; font-size: 13px; }
+            border-radius: 8px; padding: 0 14px; height: 34px; cursor: pointer; font-size: 13px; }
   #addBtn:hover { border-color: var(--accent); }
   /* Add-role modal */
   #addScrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none;
@@ -156,10 +294,12 @@
               border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 8px 10px;
               font: 13px inherit; outline: none; }
   #addModal input:focus, #addModal textarea:focus { border-color: var(--accent); }
+  #addModal input:focus-visible, #addModal textarea:focus-visible, #addModal select:focus-visible {
+    outline: var(--focus-ring); outline-offset: 2px; }
   #addModal textarea { min-height: 84px; resize: vertical; }
   #addModal .actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; align-items: center; }
   #addMsg { margin-right: auto; font-size: 12.5px; color: var(--muted); }
-  #addMsg.err { color: #ffb4a6; }
+  #addMsg.err { color: var(--warn-text); }
 
   #scanScrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none;
               transition: opacity .2s; z-index: 50; }
@@ -183,10 +323,10 @@
   .funnel-num.zero { color: var(--muted); }
   .scan-badge { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
   .scan-badge.ok { color: var(--offer); }
-  .scan-badge.error { color: var(--rejected); border-color: #5a2020; }
-  .scan-badge.skipped_robots { color: var(--sourced); border-color: #5a4a20; }
-  .scan-badge.failing { color: var(--rejected); border-color: #5a2020; margin-left: 6px; }
-  .error-detail { color: #ffb4a6; font-size: 11.5px; margin-top: 3px; }
+  .scan-badge.error { color: var(--rejected); border-color: var(--rejected-border); }
+  .scan-badge.skipped_robots { color: var(--sourced); border-color: var(--sourced-border); }
+  .scan-badge.failing { color: var(--rejected); border-color: var(--rejected-border); margin-left: 6px; }
+  .error-detail { color: var(--warn-text); font-size: 11.5px; margin-top: 3px; }
   .dropped-toggle { color: var(--accent); font-size: 11.5px; cursor: pointer; background: none; border: none;
               padding: 0; text-decoration: underline dotted; }
   .dropped-list { display: none; font-size: 11.5px; color: var(--muted); margin-top: 4px; max-width: 320px; }
@@ -194,35 +334,47 @@
 </style>
 </head>
 <body>
-<header>
-  <h1>Application cockpit — Swiss Arc</h1>
-  <span id="meta"></span>
-  <span id="scanHealth"></span>
+<header class="app-header">
+  <h1>Application cockpit · Swiss Arc</h1>
+  <div class="header-actions">
+    <button id="addBtn" title="Add a role the scanner missed">＋ Add role</button>
+    <button id="scanBtn" title="Runs scan_all_companies() in-process → SQLite">Run scan now</button>
+    <button id="settingsBtn" title="Settings" aria-label="Settings">⚙</button>
+  </div>
 </header>
+<div class="scan-status-bar">
+  <span id="scanHealth"></span>
+  <span id="meta"></span>
+</div>
 <div class="toolbar">
-  <span id="chips"></span>
+  <div id="chips" class="segmented" role="tablist" aria-label="Filter by status"></div>
   <input id="search" type="search" placeholder="Filter company, role or note…">
   <label id="quotaToggleLabel" style="font-size:12.5px; color:var(--muted); display:flex; align-items:center; gap:5px; cursor:pointer">
     <input type="checkbox" id="quotaToggle"> <span id="quotaToggleText">Include Quota</span>
   </label>
-  <button id="addBtn" title="Add a role the scanner missed">＋ Add role</button>
-  <button id="scanBtn" title="Runs scan_all_companies() in-process → SQLite">Run scan now</button>
 </div>
 <main>
-  <table id="tbl">
-    <thead><tr>
-      <th data-k="company">Company <span class="arrow"></span></th>
-      <th data-k="title">Role <span class="arrow"></span></th>
-      <th data-k="category">Category <span class="arrow"></span></th>
-      <th data-k="score">Score <span class="arrow"></span></th>
-      <th data-k="status">Status <span class="arrow"></span></th>
-      <th data-k="interest">Interest <span class="arrow"></span></th>
-      <th data-k="due">Due <span class="arrow"></span></th>
-      <th data-k="next_action">Next action <span class="arrow"></span></th>
-    </tr></thead>
-    <tbody></tbody>
-  </table>
-  <div id="empty" hidden></div>
+  <div class="table-card">
+    <table id="tbl">
+      <colgroup>
+        <col style="width:8%"><col style="width:23%"><col style="width:9%">
+        <col style="width:7%"><col style="width:10%"><col style="width:7%">
+        <col style="width:8%"><col style="width:28%">
+      </colgroup>
+      <thead><tr>
+        <th data-k="company">Company <span class="arrow"></span></th>
+        <th data-k="title">Role <span class="arrow"></span></th>
+        <th data-k="category">Category <span class="arrow"></span></th>
+        <th data-k="score">Score <span class="arrow"></span></th>
+        <th data-k="status">Status <span class="arrow"></span></th>
+        <th data-k="interest">Interest <span class="arrow"></span></th>
+        <th data-k="due">Due <span class="arrow"></span></th>
+        <th data-k="next_action">Next action <span class="arrow"></span></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="empty" hidden></div>
+  </div>
   <div id="scanOut"></div>
 </main>
 <div id="toast"></div>
@@ -393,11 +545,9 @@ async function load() {
 
 function updateMeta(){
   const quotaCount = roles.filter(j=>j.interest==="Quota").length;
-  const visible = visibleRoles();
-  const active = visible.filter(j=>!CLOSED.has(j.status)).length;
-  $("#meta").textContent = `${visible.length} roles · ${active} active · ${visible.length-active} closed`
-    + (quotaCount && !includeQuota ? ` · ${quotaCount} Quota hidden` : "")
-    + ` · source: cockpit.db`;
+  // Counts (roles/active/closed/Quota-hidden) live in the segmented control now —
+  // repeating them here was noise. This line is provenance only.
+  $("#meta").textContent = `source: cockpit.db`;
   $("#quotaToggleText").textContent = quotaCount ? `Include Quota (${quotaCount})` : "Include Quota";
 }
 
@@ -413,9 +563,11 @@ function buildChips(){
   const items=[["all","All"]].concat(statusList().map(s=>[s,s]));
   $("#chips").innerHTML=items.map(([f,label])=>{
     const sw=f==="all"?"":`<span class="swatch" style="background:var(--${f},var(--muted))"></span>`;
-    return `<span class="chip${f===filter?" active":""}" data-f="${f}">${sw}${label} <b>${counts[f]||0}</b></span>`;
+    const active=f===filter;
+    return `<button type="button" class="seg-btn${active?" active":""}" data-f="${f}" `
+      + `role="tab" aria-selected="${active}">${sw}${label} <b>${counts[f]||0}</b></button>`;
   }).join("");
-  document.querySelectorAll(".chip").forEach(ch=>ch.addEventListener("click",()=>{ filter=ch.dataset.f; buildChips(); render(); }));
+  document.querySelectorAll(".seg-btn").forEach(ch=>ch.addEventListener("click",()=>{ filter=ch.dataset.f; buildChips(); render(); }));
 }
 
 $("#quotaToggle").addEventListener("change", e=>{
@@ -445,9 +597,9 @@ function render(){
     const statusCell=`<select class="status v-${j.status}" data-field="status">`+statuses.map(s=>`<option value="${s}" ${s===j.status?"selected":""}>${s}</option>`).join("")+`</select>`;
     tr.innerHTML=`
       <td class="company">${esc(j.company)}</td>
-      <td class="titlecell">${roleCell}</td>
+      <td class="titlecell" title="${esc(j.title)}">${roleCell}</td>
       <td class="muted">${esc(j.category)||"—"}</td>
-      <td class="score ${scoreClass(j.score)}">${j.score!=null?esc(""+j.score):"<span class='muted'>–</span>"}</td>
+      <td class="score ${scoreClass(j.score)}">${j.score!=null?esc(Number(j.score).toFixed(1)):"<span class='muted'>–</span>"}</td>
       <td>${statusCell}</td>
       <td class="muted">${esc(j.interest)||"—"}</td>
       <td class="muted">${esc(j.due)||"—"}</td>
@@ -1011,8 +1163,30 @@ document.querySelectorAll(".dw-row [data-doc]").forEach(btn=>{
   });
 });
 
+// Sticky stacking: .toolbar's `top` and thead th's `top` both depend on the
+// actual rendered height of the layer(s) above them — measured, not
+// guessed, since header/toolbar both wrap to more lines at a narrow
+// viewport width and a hardcoded pixel offset would silently misalign the
+// moment that happens. Re-measured on resize; ResizeObserver also catches
+// header height changing from something other than a viewport resize
+// (e.g. a future settings row).
+function updateStickyOffsets(){
+  const header = document.querySelector(".app-header");
+  const toolbar = document.querySelector(".toolbar");
+  if(header) document.documentElement.style.setProperty("--header-h", header.offsetHeight + "px");
+  if(toolbar) document.documentElement.style.setProperty("--toolbar-h", toolbar.offsetHeight + "px");
+}
+window.addEventListener("resize", updateStickyOffsets);
+new ResizeObserver(updateStickyOffsets).observe(document.querySelector(".app-header"));
+new ResizeObserver(updateStickyOffsets).observe(document.querySelector(".toolbar"));
+
+$("#settingsBtn").addEventListener("click", ()=>{
+  toast("Settings UI isn't built yet — edit config.yaml directly for now.");
+});
+
 load();
 loadScanHealth();
+updateStickyOffsets();
 </script>
 </body>
 </html>
