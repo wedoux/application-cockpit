@@ -33,6 +33,10 @@ backups/
 # writes it here again.
 scan.log
 
+# Written by Application Cockpit.app when launched from Launchpad/Finder,
+# since a GUI-launched app has no visible terminal to show startup errors.
+.launcher.log
+
 # Generated application documents
 applications/
 
