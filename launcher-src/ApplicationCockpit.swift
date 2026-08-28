@@ -17,6 +17,13 @@ import Cocoa
 let PORT = 8766
 let SERVER_URL = "http://127.0.0.1:\(PORT)/"
 
+// POSIX single-quote wrapping: closes the quote, emits an escaped literal
+// quote, reopens it. Correct for any string, not just the well-behaved
+// paths this is actually used on.
+func shellQuote(_ s: String) -> String {
+    "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var serverProcess: Process?
 
@@ -77,9 +84,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let pythonPath = FileManager.default.isExecutableFile(atPath: venvPython.path)
             ? venvPython.path : "/usr/bin/python3"
 
+        // Launched via launchd (Dock/Launchpad), this process gets a bare
+        // PATH — /usr/bin:/bin:/usr/sbin:/sbin, no /usr/local/bin — unlike
+        // a Terminal-launched python, which inherits PATH built by a login
+        // shell's /etc/zprofile (path_helper + the user's own ~/.zprofile).
+        // Confirmed the hard way: pdftotext (poppler, the ATS gate) lives
+        // in /usr/local/bin and was invisible to shutil.which() under the
+        // launchd environment, surfacing as "poppler's pdftotext is not
+        // installed" even though it is — a PATH problem masquerading as a
+        // missing dependency. Routing through `zsh -l` sources the same
+        // profile a real terminal would, so this app sees the same PATH
+        // (and anything else shell-profile-dependent) the user's shell does.
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: pythonPath)
-        task.arguments = [appPy.path]
+        task.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        task.arguments = ["-l", "-c", "exec \(shellQuote(pythonPath)) \(shellQuote(appPy.path))"]
         task.currentDirectoryURL = toolDir
 
         // No visible terminal, so keep a log — same convention as the

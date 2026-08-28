@@ -11,4 +11,8 @@ else
 fi
 
 echo "Starting Application Cockpit…  (close this window to stop it)"
-exec "$PY" app.py
+# -l (login shell) so PATH is built the same way a normal terminal prompt's
+# is (path_helper via /etc/zprofile + ~/.zprofile) — belt-and-suspenders
+# alongside the same fix in the native .app launcher; Terminal-run scripts
+# usually already inherit this, but don't rely on that being guaranteed.
+exec /bin/zsh -l -c "exec $(printf '%q' "$PY") $(printf '%q' "app.py")"

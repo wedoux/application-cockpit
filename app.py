@@ -396,8 +396,22 @@ def api_generate(role_id):
             return jsonify({"ok": False, "error": "assembly", "message": str(e)}), 400
         except Exception as e:  # noqa: BLE001 — surface the API error to the UI
             conn.close()
-            return jsonify({"ok": False, "error": "generation_failed",
-                            "message": str(e)}), 502
+            msg = str(e)
+            # Anthropic doesn't raise a distinct exception type for this —
+            # it's a BadRequestError like any other 400, but always carries
+            # this exact phrase (documented API behavior, not inferred), so
+            # it's the only reliable way to tell "out of credits" apart from
+            # every other reason a request can fail. Worth a clear, specific
+            # message: the generic "generation_failed" 502 buried the real
+            # cause behind an SDK exception string a user has no reason to
+            # recognize as "go add credits," not e.g. a JD/prompt problem.
+            if "credit balance" in msg.lower():
+                return jsonify({
+                    "ok": False, "error": "insufficient_credits",
+                    "message": "Your Anthropic API credit balance is too low to generate. "
+                               "Top up at console.anthropic.com/settings/billing, then try again.",
+                }), 402
+            return jsonify({"ok": False, "error": "generation_failed", "message": msg}), 502
         version = conn.execute(
             "SELECT COALESCE(MAX(version), 0) + 1 FROM documents "
             "WHERE role_id = ? AND doc_type = ?", (role_id, dt),

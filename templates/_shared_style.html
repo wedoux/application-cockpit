@@ -23,9 +23,18 @@ body {
 }
 @media print {
   html, body { background: #fff; }
-  .page { width: auto; min-height: auto; margin: 0; box-shadow: none; }
+  /* .page's own padding (13mm 18mm 12mm, set above) is what makes the
+     on-screen preview look like a margined sheet — but there's only one
+     .page div for the whole document; pagination across physical A4
+     sheets happens via page-break-inside:avoid rules on elements inside
+     it, not via separate per-page containers. That padding therefore
+     only ever lands at the very top of page 1 and the very bottom of the
+     last page — every page in between starts and ends flush with no
+     margin at all. @page margin is what actually applies per physical
+     page, so print mode hands margin duty to it instead. */
+  .page { width: auto; min-height: auto; margin: 0; padding: 0; box-shadow: none; }
 }
-@page { size: A4; margin: 0; }
+@page { size: A4; margin: 13mm 18mm 12mm; }
 
 .header { position: relative; padding-right: 34mm; min-height: 28mm; }
 .name { font-size: 22pt; font-weight: 700; margin: 0 0 2mm; line-height: 1.15; letter-spacing: -0.01em;
