@@ -3,10 +3,13 @@
 CV HTML rendering (Phase 3b).
 =============================
 Pure presentation: reads content_json only, never content_md, never alters
-content. All personal data (name, contact, taglines, headshot) comes from
-config.yaml's profile: block — nothing personal is hardcoded here or in
-the template, which is the Tier 2 boundary (a peer swaps config, not this
-code, to render their own CV).
+content — with one deliberate exception, [GAP: ...] markers (see
+_clean_gap_markers_from_cv / render_cover_letter_html), stripped only from
+what reaches a PDF, never from the stored content itself. All personal
+data (name, contact, taglines, headshot) comes from config.yaml's
+profile: block — nothing personal is hardcoded here or in the template,
+which is the Tier 2 boundary (a peer swaps config, not this code, to
+render their own CV).
 
 Images are embedded as base64 data URIs so the rendered HTML makes no
 external requests and needs no static file route — the same string works for
@@ -22,7 +25,9 @@ CV — never in generated text, only here in the template.
 """
 
 import base64
+import copy
 import mimetypes
+import re
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -37,6 +42,26 @@ _env = Environment(
 
 class RenderError(Exception):
     pass
+
+
+# Same pattern as verifier.py's own (private) _GAP_RE — duplicated rather
+# than imported, since that one's an internal constant of a different
+# module, not a shared utility. Only eats surrounding horizontal
+# whitespace, not newlines — a marker sitting at a line/paragraph boundary
+# shouldn't merge it into its neighbor.
+_GAP_RE = re.compile(r"[ \t]*\[GAP:[^\]]*\][ \t]*")
+
+
+def _strip_gap_markers(text):
+    """Remove [GAP: ...] markers before a cover letter reaches a PDF. The
+    marker is a useful, deliberate signal on screen — there's no editing UI
+    yet to clear it before sending, so it must never reach a document a
+    real employer opens. Collapses the horizontal whitespace the marker
+    leaves behind down to a single space, without touching paragraph
+    breaks."""
+    text = _GAP_RE.sub(" ", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    return text.strip()
 
 
 def _data_uri(path):
@@ -99,11 +124,70 @@ def _header_context(category, config):
     }
 
 
+def _clean_gap_markers_from_cv(content_json):
+    """Deep copy of content_json with [GAP: ...] markers stripped from
+    every string field, before it reaches a PDF a real employer opens —
+    content_json itself (the DB row, the raw-JSON view) stays untouched,
+    same reasoning as the cover letter's version.
+
+    Bullets (experience and projects) and what_i_lead entries get an extra
+    step: if a bullet or a lead's detail was ENTIRELY a marker, stripping
+    it leaves nothing — dropped rather than rendered as an empty bullet
+    point. Scalar fields (role, company, dates, a qualification, a
+    language) are left alone if they empty out: none of them are ever
+    plausibly just a marker with nothing else, unlike a bullet, which
+    exists specifically to state one claim the model may have had nothing
+    to back up."""
+    cv = copy.deepcopy(content_json)
+
+    if isinstance(cv.get("profile"), str):
+        cv["profile"] = _strip_gap_markers(cv["profile"])
+
+    cleaned_leads = []
+    for item in cv.get("what_i_lead", []):
+        if isinstance(item, dict):
+            label = _strip_gap_markers(item.get("label") or "") or None
+            detail = _strip_gap_markers(item.get("detail") or "")
+            if detail:
+                cleaned_leads.append({"label": label, "detail": detail})
+        elif isinstance(item, str):
+            detail = _strip_gap_markers(item)
+            if detail:
+                cleaned_leads.append(detail)
+    cv["what_i_lead"] = cleaned_leads
+
+    for exp in cv.get("experience", []):
+        for field in ("role", "company", "dates", "context"):
+            if exp.get(field):
+                exp[field] = _strip_gap_markers(exp[field])
+        exp["bullets"] = [b for b in (_strip_gap_markers(b) for b in exp.get("bullets") or []) if b]
+
+    for proj in cv.get("projects") or []:
+        for field in ("name", "context"):
+            if proj.get(field):
+                proj[field] = _strip_gap_markers(proj[field])
+        proj["bullets"] = [b for b in (_strip_gap_markers(b) for b in proj.get("bullets") or []) if b]
+
+    for edu in cv.get("education", []):
+        for field in ("qualification", "institution", "dates"):
+            if edu.get(field):
+                edu[field] = _strip_gap_markers(edu[field])
+
+    for lang in cv.get("languages", []):
+        for field in ("language", "level"):
+            if lang.get(field):
+                lang[field] = _strip_gap_markers(lang[field])
+
+    return cv
+
+
 def render_cv_html(content_json, category, config):
     """Render content_json (the validated CV JSON — see cv_schema.py) to a
     single self-contained HTML string."""
     if not isinstance(content_json, dict):
         raise RenderError("content_json must be a dict — nothing to render")
+
+    content_json = _clean_gap_markers_from_cv(content_json)
 
     ctx = _header_context(category, config)
     assets_dir = Path(config["paths"]["assets"])
@@ -148,13 +232,18 @@ def render_cover_letter_html(content_md, category, config):
     """Render a cover letter's prose (content_md — cover letters have no
     structured JSON, text stays the primary format) as an optional styled
     letterhead PDF source. Reuses the same header block and template system
-    as the CV; never the default output, only built on request."""
+    as the CV; never the default output, only built on request.
+
+    [GAP: ...] markers are stripped here, not upstream — content_md itself
+    stays untouched (still shown with its markers in the on-screen view and
+    the raw text stored in the DB); only what actually reaches a PDF a real
+    employer opens is cleaned."""
     if not isinstance(content_md, str) or not content_md.strip():
         raise RenderError("content_md must be a non-empty string — nothing to render")
 
     ctx = _header_context(category, config)
     template = _env.get_template("cover_letter.html")
-    return template.render(body=content_md.strip(), **ctx)
+    return template.render(body=_strip_gap_markers(content_md.strip()), **ctx)
 
 
 if __name__ == "__main__":

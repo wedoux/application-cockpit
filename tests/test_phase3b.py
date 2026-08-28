@@ -1,4 +1,5 @@
 import base64
+import copy
 import tempfile
 from pathlib import Path
 
@@ -197,3 +198,93 @@ def test_no_personal_data_hardcoded_in_template_or_renderer():
         text = path.read_text(encoding="utf-8")
         for s in forbidden:
             assert s not in text, f"{s!r} hardcoded in {path.name}"
+
+
+# ---- cover letter: [GAP: ...] markers stripped before a PDF, never the source ----
+
+def test_cover_letter_strips_gap_marker():
+    with tempfile.TemporaryDirectory() as d:
+        md = "Led a team of [GAP: exact size] engineers to ship the platform."
+        html = cv_render.render_cover_letter_html(md, "Leadership", _fake_config(d))
+    assert "[GAP" not in html
+    assert "Led a team of engineers to ship the platform." in html
+
+
+def test_cover_letter_gap_strip_does_not_mutate_source_content_md():
+    md = "Opening line. [GAP: unverifiable claim] Closing line."
+    original = md
+    with tempfile.TemporaryDirectory() as d:
+        cv_render.render_cover_letter_html(md, "Leadership", _fake_config(d))
+    assert md == original, "content_md must stay untouched — still shown with its markers on screen"
+
+
+def test_cover_letter_multiple_gap_markers_all_stripped():
+    with tempfile.TemporaryDirectory() as d:
+        md = "First [GAP: a] point. Second [GAP: b] point. Third [GAP: c] point."
+        html = cv_render.render_cover_letter_html(md, "Leadership", _fake_config(d))
+    assert "[GAP" not in html
+    assert "First point. Second point. Third point." in html
+
+
+def test_cover_letter_gap_marker_does_not_merge_paragraphs():
+    with tempfile.TemporaryDirectory() as d:
+        md = "First paragraph ends here. [GAP: aside]\n\nSecond paragraph starts here."
+        html = cv_render.render_cover_letter_html(md, "Leadership", _fake_config(d))
+    assert "[GAP" not in html
+    assert "First paragraph ends here." in html
+    assert "Second paragraph starts here." in html
+    # the paragraph break must survive — not collapsed onto one line
+    body_start = html.index("First paragraph")
+    body_end = html.index("</div>", body_start)
+    body = html[body_start:body_end]
+    assert "\n\n" in body
+
+
+# ---- CV: same [GAP: ...] stripping, plus dropping bullets/leads a marker
+# left entirely empty rather than rendering them as blank lines ----
+
+def test_cv_strips_gap_marker_from_profile_and_bullet():
+    cv = copy.deepcopy(MINIMAL_CV)
+    cv["profile"] = "A profile with [GAP: unverifiable claim] in it."
+    cv["experience"][0]["bullets"] = ["Shipped a feature [GAP: exact metric] for customers."]
+    with tempfile.TemporaryDirectory() as d:
+        html = cv_render.render_cv_html(cv, "Leadership", _fake_config(d))
+    assert "[GAP" not in html
+    assert "A profile with in it." in html
+    assert "Shipped a feature for customers." in html
+
+
+def test_cv_bullet_that_is_entirely_a_gap_marker_is_dropped_not_left_blank():
+    cv = copy.deepcopy(MINIMAL_CV)
+    cv["experience"][0]["bullets"] = [
+        "A real, kept bullet.",
+        "[GAP: no evidence of this in the master CV]",
+    ]
+    with tempfile.TemporaryDirectory() as d:
+        html = cv_render.render_cv_html(cv, "Leadership", _fake_config(d))
+    assert "[GAP" not in html
+    assert "A real, kept bullet." in html
+    assert "<li></li>" not in html
+    assert html.count("<li>") == 1
+
+
+def test_cv_what_i_lead_detail_that_is_entirely_a_gap_marker_drops_whole_item():
+    cv = copy.deepcopy(MINIMAL_CV)
+    cv["what_i_lead"] = [
+        {"label": "Kept:", "detail": "A real claim."},
+        {"label": "Dropped:", "detail": "[GAP: nothing to back this up]"},
+    ]
+    with tempfile.TemporaryDirectory() as d:
+        html = cv_render.render_cv_html(cv, "Leadership", _fake_config(d))
+    assert "[GAP" not in html
+    assert "A real claim." in html
+    assert "Dropped:" not in html  # the label goes with it — no orphan label on an empty line
+
+
+def test_cv_gap_stripping_does_not_mutate_source_content_json():
+    cv = copy.deepcopy(MINIMAL_CV)
+    cv["experience"][0]["bullets"] = ["[GAP: entirely unverifiable]"]
+    snapshot = copy.deepcopy(cv)
+    with tempfile.TemporaryDirectory() as d:
+        cv_render.render_cv_html(cv, "Leadership", _fake_config(d))
+    assert cv == snapshot, "content_json must stay untouched — still shown with its markers in the raw-JSON view"
