@@ -1011,7 +1011,26 @@ function updateCatNote(){
 
 $(".dw-close").addEventListener("click", closeDrawer);
 $("#scrim").addEventListener("click", closeDrawer);
-document.addEventListener("keydown", e=>{ if(e.key==="Escape" && current) closeDrawer(); });
+
+// Escape dismisses the TOPMOST open layer and nothing else. The report
+// modals sit at z-index 51 and the drawer at 41, so a modal opened over the
+// drawer must close first and leave the drawer exactly where it was — one
+// keypress collapsing the whole stack would throw away the role you were
+// reading to get rid of a modal you glanced at. Ordered topmost-first;
+// keep the drawer last.
+//
+// The add-role modal is deliberately not in this list: it holds a form, and
+// Escape over typed input discards work rather than dismissing a report.
+const escapeLayers = [
+  { open: ()=>$("#stagedModal").classList.contains("open"), close: closeStagedModal },
+  { open: ()=>$("#scanModal").classList.contains("open"),   close: closeScanModal },
+  { open: ()=>current != null,                              close: closeDrawer },
+];
+document.addEventListener("keydown", e=>{
+  if(e.key !== "Escape") return;
+  const top = escapeLayers.find(layer=>layer.open());
+  if(top) top.close();
+});
 
 $("#dwcat").addEventListener("change", async e=>{
   const v=e.target.value; updateCatNote();
