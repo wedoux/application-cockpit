@@ -1,6 +1,8 @@
 import json
 import re
 
+import pytest
+
 import db as dbmod
 import gmail_sweep_apply as gsa
 
@@ -417,3 +419,93 @@ def test_create_without_apply_does_not_write_even_with_force(tmp_path, capsys):
     n = conn.execute("SELECT COUNT(*) FROM roles WHERE company = 'Acme Corp'").fetchone()[0]
     conn.close()
     assert n == 1, "still just the original row — force without --apply must not create"
+
+
+# ------------------------------------------------------------------
+# --create schema: score + band
+# ------------------------------------------------------------------
+# roles.score is a REAL column the cockpit sorts and colours by, and until
+# now the create path never populated it — the schema had no score field, so
+# every swept role landed unscored. That stopped being survivable when the
+# rubric's keep threshold dropped to 2.8 and one staging file started
+# carrying both "worth a tailored application" (3.5+) and "volume candidate"
+# (2.8-3.49) rows.
+
+def test_score_lands_in_the_roles_column():
+    conn = dbmod.connect()
+    to_create, blocked, invalid = gsa.plan_creates(conn, [
+        {"company": "Scored Co", "title": "Head of Design", "url": "https://x/1",
+         "score": 3.6, "band": "tailored"},
+    ])
+    assert (blocked, invalid) == ([], [])
+    gsa.apply_creates(conn, to_create)
+    row = conn.execute("SELECT score, notes FROM roles WHERE company = 'Scored Co'").fetchone()
+    conn.close()
+    assert row["score"] == 3.6
+    # band has no column of its own — it's the rubric's label for a score
+    # range, and a second copy of the thresholds would drift from the first
+    assert "Rubric score 3.6 (tailored)." in row["notes"]
+
+
+def test_a_row_with_no_score_still_creates():
+    """Every existing staging file predates this field, and the sweep tasks
+    that don't score at all must keep working unchanged."""
+    conn = dbmod.connect()
+    to_create, _, invalid = gsa.plan_creates(conn, [
+        {"company": "Unscored Co", "title": "Head of Design", "url": "https://x/2"},
+    ])
+    assert invalid == []
+    gsa.apply_creates(conn, to_create)
+    row = conn.execute("SELECT score, notes FROM roles WHERE company = 'Unscored Co'").fetchone()
+    conn.close()
+    assert row["score"] is None
+    assert "Rubric" not in row["notes"]
+
+
+def test_a_band_without_a_score_is_still_recorded():
+    conn = dbmod.connect()
+    to_create, _, _ = gsa.plan_creates(conn, [
+        {"company": "Band Only Co", "title": "Head of Design", "url": "https://x/3",
+         "band": "volume"},
+    ])
+    gsa.apply_creates(conn, to_create)
+    row = conn.execute("SELECT score, notes FROM roles WHERE company = 'Band Only Co'").fetchone()
+    conn.close()
+    assert row["score"] is None
+    assert "Rubric band: volume." in row["notes"]
+
+
+def test_a_numeric_string_score_is_accepted():
+    # the staging files are half hand-written; "3.6" is not a mistake
+    assert gsa.coerce_score("3.6") == 3.6
+
+
+@pytest.mark.parametrize("bad", ["high", True, 42, -1, [3.6], "3.6 (tailored)"])
+def test_a_junk_score_is_refused_not_stored(bad):
+    """roles.score drives sort order and colour, so a junk value there is
+    worse than no value: it would quietly rank a role rather than visibly
+    refuse it."""
+    assert gsa.coerce_score(bad) is None
+    problems = gsa.validate_create({"company": "X", "url": "https://x/4", "score": bad})
+    assert any("bad score" in p for p in problems)
+
+
+def test_an_invalid_score_blocks_the_whole_row():
+    conn = dbmod.connect()
+    to_create, _, invalid = gsa.plan_creates(conn, [
+        {"company": "Junk Score Co", "title": "Head of Design", "url": "https://x/5", "score": "high"},
+    ])
+    conn.close()
+    assert to_create == []
+    assert len(invalid) == 1
+
+
+def test_the_score_shows_in_the_create_plan(capsys):
+    conn = dbmod.connect()
+    to_create, blocked, invalid = gsa.plan_creates(conn, [
+        {"company": "Scored Co", "title": "Head of Design", "url": "https://x/6",
+         "score": 2.9, "band": "volume"},
+    ])
+    conn.close()
+    gsa.print_plan_creates(to_create, blocked, invalid)
+    assert "score: 2.9 (volume)" in capsys.readouterr().out

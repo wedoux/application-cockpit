@@ -33,9 +33,19 @@ no match is reported under UNMATCHED and skipped.
 new_roles.json (--create mode): a JSON list of genuinely new finds, staged
 by the sweep rather than created unattended:
     [{"company": "...", "title": "...", "url": "...", "source_channel": "...",
-      "source_email_date": "...", "suggested_category": "..."}, ...]
+      "source_email_date": "...", "suggested_category": "...",
+      "score": 3.6, "band": "..."}, ...]
 "company" and "url" are required; "title" and "suggested_category" are
-best-effort from an email snippet, so they're optional. "source_channel" is
+best-effort from an email snippet, so they're optional. "score" is the
+sourcing rubric's 0-5 rating and lands in roles.score, which the cockpit
+already sorts and colours by — without it every swept role arrives
+unscored and indistinguishable from every other, which stopped being
+survivable when the keep threshold dropped to 2.8 and the same file
+started carrying both "worth a tailored application" (3.5+) and "volume
+candidate, something is wrong with it" (2.8-3.49). "band" is the label for
+that split; it has no column of its own because it's derivable from the
+score, and two copies of the thresholds would drift — it's recorded in the
+role's note and shown in the ingest panel instead. "source_channel" is
 optional too (one of SOURCE_CHANNEL_LABELS below, e.g. "gmail" or
 "careers_page") and drives the provenance note — the manual careers-page
 sweep feeds this same --create path now, so the note can no longer assert
@@ -164,6 +174,24 @@ def load_creates(path):
     return data
 
 
+def coerce_score(raw):
+    """The rubric's 0-5 rating as a float, or None if it isn't one.
+    roles.score is a REAL column the cockpit sorts and colours by, so a
+    junk value there is worse than no value: it would quietly rank a role
+    rather than visibly refuse it. A numeric string is accepted (the
+    staging files are half hand-written); a bool, a word, or a number off
+    the scale is not."""
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not 0 <= value <= 5:
+        return None
+    return value
+
+
 def validate_create(row):
     problems = []
     if not row.get("company"):
@@ -173,6 +201,8 @@ def validate_create(row):
     category = row.get("suggested_category")
     if category and category not in dbmod.CATEGORIES:
         problems.append(f"bad suggested_category: {category!r}")
+    if row.get("score") is not None and coerce_score(row.get("score")) is None:
+        problems.append(f"bad score: {row['score']!r} (want a number from 0 to 5)")
     return problems
 
 
@@ -213,6 +243,8 @@ def plan_creates(conn, creates, force=False):
             "category": row.get("suggested_category") or None,
             "source_email_date": row.get("source_email_date"),
             "source_channel": row.get("source_channel"),
+            "score": coerce_score(row.get("score")),
+            "band": (row.get("band") or "").strip() or None,
             "forced_past": dup["id"] if (dup and force) else None,
         })
     return to_create, blocked, invalid
@@ -226,6 +258,11 @@ def print_plan_creates(to_create, blocked, invalid):
         print(f"  {row['company']} / {row['title'] or '(no title)'}{forced}")
         print(f"      url: {row['url']}")
         print(f"      source: {_provenance_label(row)}")
+        if row["score"] is not None:
+            band = f" ({row['band']})" if row["band"] else ""
+            print(f"      score: {row['score']:g}{band}")
+        elif row["band"]:
+            print(f"      band: {row['band']}")
         if row["category"]:
             print(f"      category: {row['category']}")
         if row["source_email_date"]:
@@ -247,15 +284,23 @@ def apply_creates(conn, to_create):
         notes = f"Found via {_provenance_label(row)} (--create)."
         if row["source_email_date"]:
             notes += f" Source email dated {row['source_email_date']}."
+        # The band goes in the note, not a column of its own: it's the
+        # rubric's label for a score range, so storing it separately would
+        # put the thresholds in two places that can disagree.
+        if row["score"] is not None:
+            notes += f" Rubric score {row['score']:g}"
+            notes += f" ({row['band']})." if row["band"] else "."
+        elif row["band"]:
+            notes += f" Rubric band: {row['band']}."
         if row["forced_past"]:
             notes += f" Forced past existing role #{row['forced_past']} (deliberate re-application)."
         conn.execute(
             """INSERT INTO roles (
-                job_id, source, company, title, category, url, status, notes,
+                job_id, source, company, title, category, url, score, status, notes,
                 jd_source, first_seen, last_seen, created_at, updated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (row["job_id"], "sweep", row["company"], row["title"], row["category"], row["url"],
-             "sourced", notes, "none", dbmod.today(), dbmod.today(), ts, ts),
+             row["score"], "sourced", notes, "none", dbmod.today(), dbmod.today(), ts, ts),
         )
     conn.commit()
 

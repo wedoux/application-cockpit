@@ -353,6 +353,8 @@
   .staged-row input[type=checkbox] { margin-top: 3px; accent-color: var(--accent); cursor: pointer; }
   .staged-row .detail { color: var(--muted); font-size: 11.5px; margin-top: 2px; word-break: break-all; }
   .staged-row.frozen { padding-left: 22px; }
+  .staged-score { font-variant-numeric: tabular-nums; font-weight: 600; margin-right: 6px; }
+  .staged-band { color: var(--muted); font-weight: 400; }
   .staged-change { font-variant-numeric: tabular-nums; }
   .staged-selectall { font-size: 11.5px; color: var(--accent); background: none; border: none; padding: 0;
                       cursor: pointer; text-decoration: underline dotted; }
@@ -784,10 +786,20 @@ function stagedGroup(cls, title, rows){
   return `<div class="staged-group ${cls}"><h3>${title} (${rows.length})</h3>${rows.join("")}</div>`;
 }
 
+// The rubric scores every role 0-5 and the keep threshold is 2.8, so one
+// file mixes "worth a tailored application" (3.5+) with "volume candidate,
+// something is wrong with it" (2.8-3.49). Showing the score on the row is
+// what makes ticking a box a judgement rather than a formality.
+function stagedScore(r){
+  if(r.score == null) return "";
+  return `<span class="staged-score ${scoreClass(r.score)}">${esc(Number(r.score).toFixed(1))}`
+       + (r.band ? ` <span class="staged-band">${esc(r.band)}</span>` : "") + `</span>`;
+}
+
 function stagedCreateBody(pv){
   const create = pv.to_create.map(r=>stagedRow(
     r.index, true,
-    `${esc(r.company)} / ${esc(r.title || "(no title)")}`,
+    `${stagedScore(r)}${esc(r.company)} / ${esc(r.title || "(no title)")}`,
     `${esc(r.url)}<br>source: ${esc(r.source)}`
       + (r.category ? ` · category: ${esc(r.category)}` : "")
       + (r.source_email_date ? ` · email dated ${esc(r.source_email_date)}` : "")

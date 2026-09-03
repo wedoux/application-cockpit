@@ -295,6 +295,8 @@ def _preview_creates(conn, rows):
             "category": p["category"],
             "source": gsa._provenance_label(p),
             "source_email_date": p["source_email_date"],
+            "score": p["score"],
+            "band": p["band"],
         })
 
     _index_rows(rows, [

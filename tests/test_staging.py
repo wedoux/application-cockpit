@@ -474,3 +474,36 @@ def test_no_absolute_path_is_baked_into_the_module():
     someone who has the gitignored .privacy-tokens file."""
     source = (staging.REPO_DIR / "staging.py").read_text(encoding="utf-8")
     assert "/Users/" not in source
+
+def test_the_panel_shows_the_rubric_score(isolated_staging_dir):
+    """The whole reason per-role selection matters: at a 2.8 keep threshold
+    one file mixes rows worth a tailored application with volume
+    candidates, and a checkbox with no score next to it is a formality."""
+    pv = staging.preview(_stage(isolated_staging_dir, "creates.json", [
+        {"company": "Tailored Co", "title": "Head of Design", "url": "https://x/1",
+         "score": 3.8, "band": "tailored"},
+        {"company": "Volume Co", "title": "Product Designer", "url": "https://x/2",
+         "score": 2.9, "band": "volume"},
+        {"company": "Unscored Co", "title": "Design Lead", "url": "https://x/3"},
+    ]))
+    assert [(c["score"], c["band"]) for c in pv["to_create"]] == [
+        (3.8, "tailored"), (2.9, "volume"), (None, None)]
+
+
+def test_a_bad_score_shows_up_as_an_invalid_row_in_the_panel(isolated_staging_dir):
+    pv = staging.preview(_stage(isolated_staging_dir, "creates.json", [
+        {"company": "Junk Co", "title": "Head of Design", "url": "https://x/1", "score": "high"},
+    ]))
+    assert pv["to_create"] == []
+    assert "bad score" in pv["invalid"][0]["problems"][0]
+
+
+def test_ingest_populates_the_score_column(isolated_staging_dir):
+    staging.ingest(_stage(isolated_staging_dir, "creates.json", [
+        {"company": "Tailored Co", "title": "Head of Design", "url": "https://x/1",
+         "score": 3.8, "band": "tailored"},
+    ]))
+    conn = dbmod.connect()
+    row = conn.execute("SELECT score FROM roles WHERE company = 'Tailored Co'").fetchone()
+    conn.close()
+    assert row["score"] == 3.8
