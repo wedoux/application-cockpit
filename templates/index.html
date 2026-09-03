@@ -273,6 +273,17 @@
   #viewerText { display: none; margin: 0; background: var(--panel); border: 1px solid var(--line);
                 border-radius: 10px; padding: 16px 18px; white-space: pre-wrap; font: 13px/1.6 inherit;
                 color: var(--text); max-height: 46vh; overflow: auto; }
+  /* Cover-letter edit mode */
+  #viewerEdit { display: none; width: 100%; min-height: 46vh; background: var(--panel);
+                border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px;
+                color: var(--text); font: 13px/1.6 inherit; resize: vertical; outline: none; }
+  #viewerEdit:focus { border-color: var(--accent); }
+  #viewerEdit:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+  #viewerEditErr { display: none; margin-top: 10px; padding: 10px 12px; border-radius: 8px;
+                   border: 1px solid var(--rejected-border); color: var(--warn-text);
+                   font-size: 12.5px; line-height: 1.5; }
+  .edited-badge { font-size: 10.5px; padding: 1px 7px; border-radius: 999px;
+                  border: 1px solid var(--line); color: var(--sourced); white-space: nowrap; }
   #genMsg { color: var(--muted); font-size: 12.5px; margin-left: 4px; }
   #genMsg.err { color: var(--warn-text); }
   #addBtn { background: var(--panel); border: 1px solid var(--line); color: var(--text);
@@ -543,12 +554,17 @@
         <span id="viewerLangGate" title="Language gate — BLOCK stops generation, WARN never does"></span>
         <span style="flex:1"></span>
         <button class="btn" id="viewerRawBtn"></button>
+        <button class="btn" id="viewerEditBtn">Edit</button>
+        <button class="btn" id="viewerEditCancel">Cancel</button>
         <button class="btn" id="viewerApproveBtn">Approve</button>
+        <button class="btn primary" id="viewerEditSave">Save as new version</button>
         <button class="btn primary" id="viewerDownloadBtn">Download PDF</button>
       </div>
       <div class="muted" id="viewerNote"></div>
       <iframe id="viewerFrame"></iframe>
       <pre id="viewerText"></pre>
+      <textarea id="viewerEdit" spellcheck="true"></textarea>
+      <div id="viewerEditErr"></div>
     </div>
   </div>
 </aside>
@@ -1209,7 +1225,13 @@ async function loadDocs(){
     const langBadge = doc.language_gate_verdict && doc.language_gate_verdict!=="clear"
       ? `<span class="badge lang-${doc.language_gate_verdict}" title="Language gate${langOverridden}">lang: ${doc.language_gate_verdict}${langOverridden}</span>`
       : "";
-    el.innerHTML=`<span class="grow">${label} <span class="muted">v${doc.version} · ${esc(doc.model)}</span></span>
+    // model is NULL on a hand-edited version — no model produced that text —
+    // so edited_from is what names its author, in both places a version shows.
+    const author = doc.edited_from ? "hand-edited" : esc(doc.model);
+    const editedBadge = doc.edited_from
+      ? `<span class="edited-badge" title="Edited by hand from v-parent #${doc.edited_from}">edited</span>` : "";
+    el.innerHTML=`<span class="grow">${label} <span class="muted">v${doc.version} · ${author}</span></span>
+      ${editedBadge}
       ${langBadge}
       <span class="badge ${doc.status}">${doc.status}</span>
       <button class="btn" data-act="view">View</button>`;
@@ -1239,31 +1261,38 @@ async function downloadDoc(docId, btn){
   btn.disabled=false; btn.textContent=old;
 }
 
-let viewerState = null; // { doc, showingRaw }
+let viewerState = null; // { doc, showingRaw, editing }
 
 function closeViewer(){
   $("#viewer").style.display="none";
   $("#viewerFrame").src=""; $("#viewerFrame").style.display="none";
   $("#viewerText").style.display="none";
+  $("#viewerEdit").style.display="none";
+  $("#viewerEditErr").style.display="none";
   viewerState = null;
 }
 
 async function viewDoc(docId){
   const r = await fetch(`/api/documents/${docId}`);
   const doc = await r.json();
-  viewerState = { doc, showingRaw: false };
+  viewerState = { doc, showingRaw: false, editing: false };
   renderViewer();
   $("#viewer").scrollIntoView({behavior:"smooth", block:"nearest"});
 }
 
 function renderViewer(){
   if(!viewerState) return;
-  const { doc, showingRaw } = viewerState;
+  const { doc, showingRaw, editing } = viewerState;
+  // Cover letters are prose in content_md, so editing them is a textarea and
+  // a save. A CV is structured content_json the renderer and the PDF read;
+  // free-text editing would break that schema, so it isn't offered.
+  const editable = doc.doc_type === "cover_letter";
   const label = doc.doc_type==="cv" ? "CV" : "Cover letter";
   const hasStructured = doc.doc_type==="cv" && !!doc.content_json;   // styled render available
   const legacyCv = doc.doc_type==="cv" && !doc.content_json;         // predates content_json — text only, no PDF
 
-  $("#viewerMeta").textContent = `${label} v${doc.version} · ${esc(doc.model)} · ${doc.status}`;
+  const author = doc.edited_from ? `hand-edited from v-parent #${doc.edited_from}` : esc(doc.model);
+  $("#viewerMeta").textContent = `${label} v${doc.version} · ${author} · ${doc.status}`;
 
   let fidelity=null; try{ fidelity = doc.critic_notes ? JSON.parse(doc.critic_notes) : null; }catch(e){}
   const fidEl = $("#viewerFidelity");
@@ -1286,7 +1315,7 @@ function renderViewer(){
   }
 
   const apBtn=$("#viewerApproveBtn");
-  if(doc.status==="draft"){
+  if(doc.status==="draft" && !editing){
     apBtn.style.display="";
     apBtn.onclick = async ()=>{
       await fetch(`/api/documents/${doc.id}/approve`,{method:"POST"});
@@ -1300,7 +1329,10 @@ function renderViewer(){
   }
 
   const dlBtn=$("#viewerDownloadBtn"), note=$("#viewerNote");
-  if(legacyCv){
+  if(editing){
+    dlBtn.style.display="none";
+    note.style.display="none";
+  } else if(legacyCv){
     dlBtn.style.display="none";
     note.style.display="block";
     note.textContent="This CV predates structured content. Regenerate it to get a styled render and a PDF.";
@@ -1311,7 +1343,7 @@ function renderViewer(){
   }
 
   const rawBtn=$("#viewerRawBtn");
-  if(hasStructured){
+  if(hasStructured && !editing){
     rawBtn.style.display="";
     rawBtn.textContent = showingRaw ? "View styled" : "View raw JSON";
     rawBtn.onclick = ()=>{ viewerState.showingRaw = !viewerState.showingRaw; renderViewer(); };
@@ -1319,8 +1351,27 @@ function renderViewer(){
     rawBtn.style.display="none";
   }
 
+  const editBtn=$("#viewerEditBtn"), saveBtn=$("#viewerEditSave"), cancelBtn=$("#viewerEditCancel");
+  const box=$("#viewerEdit"), errBox=$("#viewerEditErr");
+  editBtn.style.display = (editable && !editing) ? "" : "none";
+  saveBtn.style.display = editing ? "" : "none";
+  cancelBtn.style.display = editing ? "" : "none";
+  editBtn.onclick = ()=>{
+    box.value = doc.content_md || "";
+    errBox.style.display="none"; errBox.textContent="";
+    viewerState.editing = true;
+    renderViewer();
+    box.focus();
+  };
+  cancelBtn.onclick = ()=>{ viewerState.editing = false; renderViewer(); };
+  saveBtn.onclick = ()=>saveEdit(doc, saveBtn);
+
   const frame=$("#viewerFrame"), text=$("#viewerText");
-  if(hasStructured && !showingRaw){
+  if(editing){
+    frame.style.display="none"; frame.src="";
+    text.style.display="none";
+    box.style.display="block";
+  } else if(hasStructured && !showingRaw){
     text.style.display="none";
     frame.style.display="block";
     frame.src=`/api/documents/${doc.id}/preview`;
@@ -1333,8 +1384,39 @@ function renderViewer(){
     text.style.display="block";
     text.textContent = (doc.content_md || "(empty)") + fidelityDetailText(fidelity);
   }
+  if(!editing){ box.style.display="none"; errBox.style.display="none"; }
 
   $("#viewer").style.display="block";
+}
+
+async function saveEdit(doc, btn){
+  const box=$("#viewerEdit"), errBox=$("#viewerEditErr");
+  btn.disabled=true; const old=btn.textContent; btn.textContent="Checking…";
+  try{
+    const r = await fetch(`/api/documents/${doc.id}/edit`, {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({content_md: box.value}),
+    });
+    const d = await r.json();
+    if(!r.ok || !d.ok){
+      // Keep what was typed. Reverting to the stored version on a blocked
+      // save would throw away the edit AND the chance to fix it in place,
+      // which is the opposite of what a gate is for.
+      errBox.textContent = d.message || `Save failed (${r.status})`;
+      errBox.style.display="block";
+      errBox.scrollIntoView({behavior:"smooth", block:"nearest"});
+      btn.disabled=false; btn.textContent=old;
+      return;
+    }
+    toast(`Saved as v${d.version}`);
+    viewerState.editing = false;
+    await loadDocs();
+    await viewDoc(d.id);
+  }catch(e){
+    errBox.textContent = "Save failed: "+e;
+    errBox.style.display="block";
+  }
+  btn.disabled=false; btn.textContent=old;
 }
 
 function fidelityDetailText(fidelity){

@@ -334,6 +334,66 @@ def api_update(role_id):
 # Generation + documents
 # ------------------------------------------------------------------
 
+def run_fidelity_gates(content_md, *, master_cv_text, master_cv_path, jd_text,
+                       profile_text, repairs=(), language_gate=None):
+    """Every check that stands between a piece of text and documents storage,
+    in one place, returning the fidelity dict that becomes critic_notes.
+    The caller decides what to do about fidelity["numeric_gate"]["blocked"].
+
+    Shared by generation and by hand-editing rather than copied into each,
+    the same way staging.py calls gmail_sweep_apply.py instead of writing a
+    second duplicate rule: two copies drift, and then whether a number is
+    acceptable starts depending on which door the text came through. A gate
+    you can get around by typing the text yourself is not a gate.
+
+    Source-fidelity (advisory, never blocks) records exactly which master CV
+    sourced this text — filename plus sha256 — because the master CV is the
+    verifier's ground truth and it changes over time. jd_sha256 alongside it
+    is JD provenance: a re-fetch overwrites roles.jd_text, so without it,
+    which exact JD a stored document was written against is unrecoverable.
+    Both are computed from what's on disk NOW, never copied from a parent
+    version: if the master CV changed since the draft was generated, that's
+    a real fact and the new version should say so.
+
+    The numeric fact gate BLOCKS. Every numeric token must trace back to the
+    master CV, the JD, or professional-profile.md. Numbers are discrete — a
+    rephrase can't hide an invented one the way prose can — and they're
+    where interview liability actually lives.
+
+    language_gate is passed through rather than recomputed. It's a function
+    of the JD and declared languages, not of this text, so re-running it on
+    an edit would re-decide the role instead of checking the edit; an edited
+    version carries its parent's verdict, which is still true of the role.
+    """
+    fidelity = verifier.verify_fidelity(content_md, master_cv_text)
+    fidelity["master_cv_file"] = Path(master_cv_path).name
+    fidelity["master_cv_sha256"] = hashlib.sha256(master_cv_text.encode("utf-8")).hexdigest()
+    fidelity["jd_sha256"] = hashlib.sha256((jd_text or "").encode("utf-8")).hexdigest()
+    # Repairs reshape model output that passed the API's own JSON syntax
+    # check but not the schema — never apply that invisibly (schema
+    # validation passes a well-formed wrong answer). A hand-edit has none.
+    fidelity["repairs"] = list(repairs)
+    corpus = ng.build_corpus(master_cv_text, jd_text, profile_text)
+    fidelity["numeric_gate"] = ng.check_numeric_facts(content_md, corpus)
+    if language_gate is not None:
+        fidelity["language_gate"] = language_gate
+    return fidelity
+
+
+def numeric_block_payload(numeric, doc_type):
+    """The refusal, worded once. An edit blocked by the numeric gate has to
+    say the same thing generation says, or the two paths teach different
+    lessons about the same rule."""
+    return {
+        "ok": False, "error": "numeric_fact_gate",
+        "message": "Blocked: number(s) in the draft don't trace back to the "
+                   "master CV, the JD, or professional-profile.md: "
+                   + ", ".join(numeric["unmatched"]),
+        "unmatched": numeric["unmatched"],
+        "doc_type": doc_type,
+    }
+
+
 @app.post("/api/roles/<int:role_id>/generate")
 def api_generate(role_id):
     body = request.get_json(silent=True) or {}
@@ -418,46 +478,20 @@ def api_generate(role_id):
             "WHERE role_id = ? AND doc_type = ?", (role_id, dt),
         ).fetchone()[0]
 
-        # Source-fidelity check (advisory only — never blocks storage or approval).
-        # The master CV is the verifier's ground truth, so record exactly which
-        # version of it sourced this draft: filename + sha256 of its contents.
-        # jd_sha256 alongside it is JD provenance (Phase 4 close) — a re-fetch
-        # overwrites roles.jd_text, so without this, which exact JD a stored
-        # draft was written against becomes unrecoverable after the fact.
-        fidelity = verifier.verify_fidelity(gen["content_md"], gen["master_cv_text"])
-        fidelity["master_cv_file"] = Path(gen["master_cv_path"]).name
-        fidelity["master_cv_sha256"] = hashlib.sha256(
-            gen["master_cv_text"].encode("utf-8")).hexdigest()
-        fidelity["jd_sha256"] = hashlib.sha256(role["jd_text"].encode("utf-8")).hexdigest()
-        # Repairs reshape model output that passed the API's own JSON syntax
-        # check but not the schema — never apply that invisibly (schema
-        # validation passes a well-formed wrong answer).
-        fidelity["repairs"] = gen["repairs"]
-
-        # Numeric fact gate (Phase 4 close) — BLOCKING, unlike the advisory
-        # entity check above. Every numeric token in the draft must be
-        # traceable to the master CV, the JD, or professional-profile.md.
-        # Numbers are discrete (a rephrase can't hide an invented one the way
-        # prose can), and they're where interview liability actually lives —
-        # team sizes, assets under administration, locations, years — so an
-        # unmatched number never reaches storage, let alone the UI.
-        corpus = ng.build_corpus(gen["master_cv_text"], role["jd_text"], profile_text)
-        numeric = ng.check_numeric_facts(gen["content_md"], corpus)
-        fidelity["numeric_gate"] = numeric
-        fidelity["language_gate"] = {"verdict": lang_gate_verdict, "overridden": lang_gate_overridden,
-                                     **lang_gate_result}
+        fidelity = run_fidelity_gates(
+            gen["content_md"],
+            master_cv_text=gen["master_cv_text"], master_cv_path=gen["master_cv_path"],
+            jd_text=role["jd_text"], profile_text=profile_text,
+            repairs=gen["repairs"],
+            language_gate={"verdict": lang_gate_verdict, "overridden": lang_gate_overridden,
+                           **lang_gate_result},
+        )
+        numeric = fidelity["numeric_gate"]
         if numeric["blocked"]:
             conn.close()
             print(f"[generate] role {role_id} {dt} BLOCKED by numeric fact gate: "
                   f"{numeric['unmatched']}")
-            return jsonify({
-                "ok": False, "error": "numeric_fact_gate",
-                "message": "Blocked: number(s) in the draft don't trace back to the "
-                            "master CV, the JD, or professional-profile.md: "
-                            + ", ".join(numeric["unmatched"]),
-                "unmatched": numeric["unmatched"],
-                "doc_type": dt,
-            }), 422
+            return jsonify(numeric_block_payload(numeric, dt)), 422
 
         critic_notes = json.dumps(fidelity)
         content_json = json.dumps(gen["content_json"]) if gen["content_json"] is not None else None
@@ -496,7 +530,8 @@ def api_generate(role_id):
 def api_documents(role_id):
     conn = dbmod.connect()
     rows = conn.execute(
-        "SELECT id, doc_type, version, format, model, status, created_at, critic_notes "
+        "SELECT id, doc_type, version, format, model, status, edited_from, "
+        "created_at, critic_notes "
         "FROM documents WHERE role_id = ? ORDER BY doc_type, version DESC",
         (role_id,),
     ).fetchall()
@@ -553,6 +588,109 @@ def api_document(doc_id):
     if not row:
         return jsonify({"error": "not found"}), 404
     return jsonify(dict(row))
+
+
+@app.post("/api/documents/<int:doc_id>/edit")
+def api_document_edit(doc_id):
+    """Hand-edit a cover letter (BUILD-SPEC section 1: "draft off -> edit,
+    nothing is a dead end"). Until now the only fix for one wrong sentence
+    was regenerating the whole document.
+
+    Cover letters only. A CV is structured content_json that the renderer
+    and the PDF depend on, and free-text editing would break the schema
+    they read — a different feature, deliberately not this one.
+
+    The gates re-run against the edited text, through the same
+    run_fidelity_gates() the generate route uses. A number typed by hand
+    gets exactly the treatment a number written by the model gets, and a
+    blocked edit stores nothing.
+
+    The result is a NEW version. The parent row is never updated: it is the
+    record of what the model actually produced, and losing that would make
+    "did I write this or did it" unanswerable a week later.
+    """
+    body = request.get_json(silent=True) or {}
+    content_md = (body.get("content_md") or "").strip()
+
+    conn = dbmod.connect()
+    doc = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    if not doc:
+        conn.close()
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    if doc["doc_type"] != "cover_letter":
+        conn.close()
+        return jsonify({"ok": False, "error": "not_editable",
+                        "message": "Only cover letters can be edited. A CV is structured "
+                                   "content the renderer depends on — regenerate it "
+                                   "instead."}), 400
+    if not content_md:
+        conn.close()
+        return jsonify({"ok": False, "error": "empty",
+                        "message": "An edited cover letter can't be empty."}), 400
+    if content_md == (doc["content_md"] or "").strip():
+        conn.close()
+        return jsonify({"ok": False, "error": "unchanged",
+                        "message": "No changes to save."}), 400
+
+    role = conn.execute("SELECT * FROM roles WHERE id = ?", (doc["role_id"],)).fetchone()
+    if not role:
+        conn.close()
+        return jsonify({"ok": False, "error": "role_not_found"}), 404
+    if not (role["jd_text"] or "").strip():
+        conn.close()
+        return jsonify({"ok": False, "error": "no_jd",
+                        "message": "The role has no job description, so the numeric gate "
+                                   "has nothing to check against."}), 400
+
+    # Re-derived from the role and config at save time, never copied from the
+    # parent version — see run_fidelity_gates on why that distinction matters.
+    cfg = pa.load_config()
+    try:
+        master_cv_path, master_cv_text = pa.resolve_master_cv(role["category"], cfg)
+    except pa.AssemblyError as e:
+        conn.close()
+        return jsonify({"ok": False, "error": "no_category", "message": str(e)}), 400
+    profile_text = Path(cfg["paths"]["about_me"]).read_text(encoding="utf-8")
+
+    parent_fidelity = json.loads(doc["critic_notes"]) if doc["critic_notes"] else {}
+    fidelity = run_fidelity_gates(
+        content_md,
+        master_cv_text=master_cv_text, master_cv_path=master_cv_path,
+        jd_text=role["jd_text"], profile_text=profile_text,
+        language_gate=parent_fidelity.get("language_gate"),
+    )
+    numeric = fidelity["numeric_gate"]
+    if numeric["blocked"]:
+        conn.close()
+        print(f"[edit] document {doc_id} BLOCKED by numeric fact gate: {numeric['unmatched']}")
+        return jsonify(numeric_block_payload(numeric, doc["doc_type"])), 422
+
+    version = conn.execute(
+        "SELECT COALESCE(MAX(version), 0) + 1 FROM documents "
+        "WHERE role_id = ? AND doc_type = ?", (doc["role_id"], doc["doc_type"]),
+    ).fetchone()[0]
+
+    # model stays NULL: it records which model produced the text, and no
+    # model produced this one. status starts at 'draft' however the parent
+    # ended up — approval is of a specific text, and this is different text.
+    cur = conn.execute(
+        """INSERT INTO documents (
+            role_id, doc_type, version, format, content_md, content_json,
+            model, critic_notes, status, edited_from, created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        (doc["role_id"], doc["doc_type"], version, "md", content_md, None,
+         None, json.dumps(fidelity), "draft", doc_id, dbmod.now()),
+    )
+    conn.commit()
+    new_id = cur.lastrowid
+    conn.close()
+    print(f"[edit] role {doc['role_id']} cover_letter v{version} hand-edited from "
+          f"document {doc_id} | flags={len(fidelity['flags'])} gaps={len(fidelity['gaps'])} "
+          f"| numbers checked={numeric['checked']}")
+    return jsonify({"ok": True, "id": new_id, "version": version,
+                    "edited_from": doc_id,
+                    "fidelity_flags": len(fidelity["flags"]),
+                    "gaps": len(fidelity["gaps"])})
 
 
 @app.get("/api/documents/<int:doc_id>/preview")

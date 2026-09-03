@@ -119,6 +119,13 @@ CREATE TABLE IF NOT EXISTS documents (
     model         TEXT,
     critic_notes  TEXT,                        -- JSON: source-fidelity flags + [GAP: ...] markers (Phase 3a)
     status        TEXT DEFAULT 'draft',        -- draft | approved
+    -- Set when this version came from hand-editing an earlier one, to that
+    -- earlier version's id; NULL means a model produced it. One column
+    -- gives both the boolean ("did I write this") and the lineage ("from
+    -- what"), the same way roles.repost_of and roles.merged_into do.
+    -- model is NULL on an edited row: that column records which model
+    -- produced the text, and for a hand-edit the honest answer is none.
+    edited_from   INTEGER REFERENCES documents(id),
     created_at    TEXT
 );
 
@@ -308,8 +315,10 @@ def init_db(db_path=None):
     conn = connect(db_path)
     conn.executescript(SCHEMA)
     doc_cols = {r["name"] for r in conn.execute("PRAGMA table_info(documents)")}
-    if "content_json" not in doc_cols:
-        conn.execute("ALTER TABLE documents ADD COLUMN content_json TEXT")
+    for col, coltype in (("content_json", "TEXT"),
+                         ("edited_from", "INTEGER REFERENCES documents(id)")):
+        if col not in doc_cols:
+            conn.execute(f"ALTER TABLE documents ADD COLUMN {col} {coltype}")
     role_cols = {r["name"] for r in conn.execute("PRAGMA table_info(roles)")}
     for col, coltype in (("decision_reason", "TEXT"), ("decision_note", "TEXT"),
                          ("repost_of", "INTEGER REFERENCES roles(id)"),

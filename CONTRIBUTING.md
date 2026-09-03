@@ -42,7 +42,7 @@ reachable in history, or untracked and not ignored. Deliberate exceptions go in
 `.privacy-allowlist`, which drops them from the exit code and keeps printing them anyway. A
 leak found after a push can't be unpublished.
 
-322 tests, under a minute (`python -m pytest`). Green before your change, green after.
+342 tests, under a minute (`python -m pytest`). Green before your change, green after.
 
 ## What I'll decline
 
