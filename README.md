@@ -30,7 +30,7 @@ SOURCE  ──▶  GATE  ──▶  GENERATE  ──▶  VERIFY  ──▶  REND
 
 | Stage | Owner | What it does |
 |---|---|---|
-| Source | `job_scanner.py` | Seven ATS providers: Workday, Greenhouse, Lever, Ashby, SmartRecruiters, Workable, Oracle HCM. Which companies, which titles, which locations are all config, not code. |
+| Source | `job_scanner.py`, `staging.py` | Seven ATS providers: Workday, Greenhouse, Lever, Ashby, SmartRecruiters, Workable, Oracle HCM. Which companies, which titles, which locations are all config, not code. Roles found elsewhere — a manual add, or a scheduled task that stages JSON for the ingest panel to apply — arrive through the same duplicate check. |
 | Gate | `prompt_assembly.py`, `language_gate.py` | Screens the role before a single token is spent. |
 | Generate | `generation.py`, `cv_schema.py` | Your master CV, writing rules and profile stay resident. The model returns structured JSON, not prose, so tailoring can't break the layout. |
 | Verify | `verifier.py`, `numeric_fact_gate.py` | Checks the draft against your actual history. |
@@ -96,7 +96,7 @@ brew install poppler                 # or: apt install poppler-utils
 cp config.yaml.example config.yaml
 cp .env.example .env                 # add your ANTHROPIC_API_KEY
 
-python -m pytest                     # 235 passed, 3 skipped
+python -m pytest                     # 322 passed
 python app.py                        # http://127.0.0.1:8766
 ```
 
