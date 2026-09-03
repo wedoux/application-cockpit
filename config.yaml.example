@@ -19,6 +19,10 @@ paths:
   about_me:      ./sample-profile/professional-profile.md
   cv_dir:        ./sample-profile/cv
   assets:        ./sample-profile/cv/assets
+  # Where scheduled sourcing tasks drop staged JSON for the ingest panel to
+  # apply. Relative paths resolve against this repo; point it wherever your
+  # tasks can actually write (that may be outside the repo — mine is).
+  staging_dir:   ./staging
 
 # Category -> master CV file (content + voice source), relative to cv_dir.
 # Review has no auto-CV: the UI must prompt for a real category before

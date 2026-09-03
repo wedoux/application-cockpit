@@ -301,17 +301,17 @@
   #addMsg { margin-right: auto; font-size: 12.5px; color: var(--muted); }
   #addMsg.err { color: var(--warn-text); }
 
-  #scanScrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none;
+  #scanScrim, #stagedScrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none;
               transition: opacity .2s; z-index: 50; }
-  #scanScrim.open { opacity: 1; pointer-events: auto; }
+  #scanScrim.open, #stagedScrim.open { opacity: 1; pointer-events: auto; }
   #scanHealth { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
   #scanHealth:hover { color: var(--text); }
   #scanHealth .err { color: var(--rejected); }
-  #scanModal { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-48%) scale(.98);
+  #scanModal, #stagedModal { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-48%) scale(.98);
               opacity: 0; pointer-events: none; width: min(920px, 94vw); max-height: 84vh; overflow: auto;
               background: var(--bg); border: 1px solid var(--line); border-radius: 14px; z-index: 51;
               padding: 22px 24px; transition: opacity .18s, transform .18s; }
-  #scanModal.open { opacity: 1; pointer-events: auto; transform: translate(-50%,-50%) scale(1); }
+  #scanModal.open, #stagedModal.open { opacity: 1; pointer-events: auto; transform: translate(-50%,-50%) scale(1); }
   #scanModal h2 { margin: 0 0 4px; font-size: 16px; }
   #scanModal .sub { color: var(--muted); font-size: 12.5px; margin-bottom: 14px; }
   #scanModal table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
@@ -331,12 +331,42 @@
               padding: 0; text-decoration: underline dotted; }
   .dropped-list { display: none; font-size: 11.5px; color: var(--muted); margin-top: 4px; max-width: 320px; }
   .dropped-list.open { display: block; }
+
+  /* Staged finds panel */
+  #stagedBtn { background: var(--panel); border: 1px solid var(--sourced-border); color: var(--sourced);
+               border-radius: 8px; padding: 0 14px; height: 34px; cursor: pointer; font-size: 13px; }
+  #stagedBtn:hover { border-color: var(--accent); color: var(--text); }
+  #stagedBtn[hidden] { display: none; }
+  #stagedModal h2 { margin: 0 0 4px; font-size: 16px; }
+  #stagedModal .sub { color: var(--muted); font-size: 12.5px; margin-bottom: 16px; }
+  .staged-file { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
+  .staged-file-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .staged-file-head .name { font-size: 13.5px; font-weight: 500; }
+  .staged-file-head .meta { color: var(--muted); font-size: 11.5px; margin-left: auto; }
+  .staged-group { margin-top: 12px; }
+  .staged-group h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted);
+                     font-weight: 500; margin: 0 0 6px; }
+  .staged-group.blocked h3, .staged-group.invalid h3 { color: var(--rejected); }
+  .staged-row { display: flex; gap: 9px; align-items: flex-start; padding: 6px 0;
+                border-bottom: 1px solid var(--line); font-size: 12.5px; }
+  .staged-row:last-child { border-bottom: none; }
+  .staged-row input[type=checkbox] { margin-top: 3px; accent-color: var(--accent); cursor: pointer; }
+  .staged-row .detail { color: var(--muted); font-size: 11.5px; margin-top: 2px; word-break: break-all; }
+  .staged-row.frozen { padding-left: 22px; }
+  .staged-change { font-variant-numeric: tabular-nums; }
+  .staged-selectall { font-size: 11.5px; color: var(--accent); background: none; border: none; padding: 0;
+                      cursor: pointer; text-decoration: underline dotted; }
+  .staged-actions { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+  .staged-actions .count { color: var(--muted); font-size: 12px; margin-left: auto; }
+  .staged-err { color: var(--warn-text); font-size: 12.5px; }
+  .staged-empty { color: var(--muted); font-size: 12.5px; }
 </style>
 </head>
 <body>
 <header class="app-header">
   <h1>Application cockpit · Swiss Arc</h1>
   <div class="header-actions">
+    <button id="stagedBtn" hidden title="Roles staged by the scheduled sourcing tasks, waiting to be applied"></button>
     <button id="addBtn" title="Add a role the scanner missed">＋ Add role</button>
     <button id="scanBtn" title="Runs scan_all_companies() in-process → SQLite">Run scan now</button>
     <button id="settingsBtn" title="Settings" aria-label="Settings">⚙</button>
@@ -427,6 +457,13 @@
     </tr></thead>
     <tbody id="scanModalBody"></tbody>
   </table>
+</div>
+
+<div id="stagedScrim"></div>
+<div id="stagedModal">
+  <h2>Staged finds</h2>
+  <div class="sub" id="stagedSub"></div>
+  <div id="stagedBody"></div>
 </div>
 
 <div id="scrim"></div>
@@ -708,6 +745,187 @@ function openScanModal(){
 function closeScanModal(){ $("#scanScrim").classList.remove("open"); $("#scanModal").classList.remove("open"); }
 $("#scanHealth").addEventListener("click", openScanModal);
 $("#scanScrim").addEventListener("click", closeScanModal);
+
+// ---------------- Staged finds ----------------
+// The scheduled sourcing tasks can't write to cockpit.db (SQLite gets no
+// file locks on the sandbox's network-style mount), so they stage JSON and
+// stop. This is the other half: the diff, and the button that applies it.
+// Checkboxes are keyed to the row's index in the SOURCE FILE, not its
+// position in the plan — the plan is recomputed server-side at apply time
+// and can shift under us if the cron inserts something in between.
+let stagedFiles = [];
+
+async function loadStaged(){
+  try{
+    const r = await fetch("/api/staged");
+    const d = await r.json();
+    stagedFiles = d.files || [];
+    const btn = $("#stagedBtn");
+    btn.hidden = !d.pending;
+    btn.textContent = `Staged (${d.pending})`;
+  }catch(e){ /* the panel is a convenience; a failed poll must not break the table */ }
+}
+
+function stagedRow(idx, checked, main, detail){
+  return `<label class="staged-row">
+    <input type="checkbox" data-idx="${idx}"${checked?" checked":""}>
+    <span><span class="main">${main}</span>${detail?`<div class="detail">${detail}</div>`:""}</span>
+  </label>`;
+}
+
+function stagedFrozenRow(main, detail){
+  return `<div class="staged-row frozen">
+    <span><span class="main">${main}</span>${detail?`<div class="detail">${detail}</div>`:""}</span>
+  </div>`;
+}
+
+function stagedGroup(cls, title, rows){
+  if(!rows.length) return "";
+  return `<div class="staged-group ${cls}"><h3>${title} (${rows.length})</h3>${rows.join("")}</div>`;
+}
+
+function stagedCreateBody(pv){
+  const create = pv.to_create.map(r=>stagedRow(
+    r.index, true,
+    `${esc(r.company)} / ${esc(r.title || "(no title)")}`,
+    `${esc(r.url)}<br>source: ${esc(r.source)}`
+      + (r.category ? ` · category: ${esc(r.category)}` : "")
+      + (r.source_email_date ? ` · email dated ${esc(r.source_email_date)}` : "")
+  ));
+  const blocked = pv.blocked.map(r=>stagedFrozenRow(
+    `${esc(r.company)} / ${esc(r.title || "(no title)")}`,
+    `matches existing role #${r.existing.id} (${esc(r.existing.company)} / `
+      + `${esc(r.existing.title || "(no title)")}, status=${esc(r.existing.status)})`
+  ));
+  const invalid = pv.invalid.map(r=>stagedFrozenRow(
+    esc(JSON.stringify(r.row)), esc(r.problems.join("; "))
+  ));
+  return stagedGroup("create", "To create", create)
+       + stagedGroup("blocked", "Blocked — already in the cockpit", blocked)
+       + stagedGroup("invalid", "Invalid — skipped", invalid);
+}
+
+function stagedUpdateBody(pv){
+  const update = pv.to_update.map(r=>stagedRow(
+    r.index, true,
+    `[${r.role_id}] ${esc(r.company)} / ${esc(r.title || "(no title)")}`,
+    r.changes.map(c=>`<span class="staged-change">${esc(c.field)}: ${esc(c.old)} → ${esc(c.new)}</span>`).join("<br>")
+  ));
+  const nochange = pv.no_change.map(r=>stagedFrozenRow(
+    `${esc(r.company)} / ${esc(r.title || "(no title)")}`,
+    r.role_id ? `role #${r.role_id} already says this` : "nothing to change"
+  ));
+  const unmatched = pv.unmatched.map(r=>stagedFrozenRow(
+    `${esc(r.company)} / ${esc(r.title || "(no title)")}`, "no role in the cockpit matches — never created by an update"
+  ));
+  const invalid = pv.invalid.map(r=>stagedFrozenRow(
+    esc(JSON.stringify(r.row)), esc(r.problems.join("; "))
+  ));
+  return stagedGroup("update", "To update", update)
+       + stagedGroup("nochange", "No change", nochange)
+       + stagedGroup("blocked", "Unmatched — not created", unmatched)
+       + stagedGroup("invalid", "Invalid — skipped", invalid);
+}
+
+function renderStaged(){
+  const n = stagedFiles.length;
+  $("#stagedSub").textContent = n
+    ? `${n} file${n===1?"":"s"} waiting in staging/. Applied files are renamed .applied.json and drop off this list.`
+    : "Nothing staged. The sourcing tasks drop their finds here.";
+  $("#stagedBody").innerHTML = stagedFiles.map((f, i)=>{
+    const pv = f.preview;
+    let body, selectable = 0;
+    if(f.error){
+      body = `<div class="staged-err">${esc(f.error)}</div>`;
+    } else if(f.mode === "empty"){
+      body = `<div class="staged-empty">Empty drop — the sweep ran and found nothing.</div>`;
+    } else if(f.mode === "create"){
+      body = stagedCreateBody(pv); selectable = pv.to_create.length;
+    } else {
+      body = stagedUpdateBody(pv); selectable = pv.to_update.length;
+    }
+    // A fully-blocked file has nothing to tick, so "all / none" and a button
+    // labelled "Apply" would both be lying about what pressing it does — all
+    // it can do is clear the file off the list.
+    const selectAll = selectable
+      ? `<button class="staged-selectall" data-file="${i}" data-all="1">all</button> ·
+         <button class="staged-selectall" data-file="${i}" data-all="0">none</button>`
+      : "";
+    const applyLabel = f.error ? "" :
+      `<button class="btn primary staged-apply" data-file="${i}">${selectable ? "Apply" : "Mark done"}</button>
+       <span class="count" data-count="${i}"></span>`;
+    return `<div class="staged-file" data-file="${i}">
+      <div class="staged-file-head">
+        <span class="name">${esc(f.filename)}</span>
+        <span class="scan-badge">${esc(f.mode || "unreadable")}</span>
+        ${selectAll}
+        <span class="meta">${esc(f.mtime)} · ${f.rows} row${f.rows===1?"":"s"}</span>
+      </div>
+      ${body}
+      <div class="staged-actions">${applyLabel}</div>
+    </div>`;
+  }).join("") || `<div class="staged-empty">Nothing staged.</div>`;
+
+  $("#stagedBody").querySelectorAll(".staged-file").forEach(el=>{
+    el.addEventListener("change", ()=>updateStagedCount(el));
+    updateStagedCount(el);
+  });
+  $("#stagedBody").querySelectorAll(".staged-selectall").forEach(btn=>btn.addEventListener("click", ()=>{
+    const el = $(`.staged-file[data-file="${btn.dataset.file}"]`);
+    el.querySelectorAll("input[type=checkbox]").forEach(cb=>{ cb.checked = btn.dataset.all === "1"; });
+    updateStagedCount(el);
+  }));
+  $("#stagedBody").querySelectorAll(".staged-apply").forEach(btn=>btn.addEventListener("click", ()=>applyStaged(btn)));
+}
+
+function stagedSelection(fileEl){
+  return [...fileEl.querySelectorAll("input[type=checkbox]")]
+    .filter(cb=>cb.checked).map(cb=>parseInt(cb.dataset.idx, 10));
+}
+
+function updateStagedCount(fileEl){
+  const i = fileEl.dataset.file;
+  const total = fileEl.querySelectorAll("input[type=checkbox]").length;
+  const chosen = stagedSelection(fileEl).length;
+  const label = fileEl.querySelector(`[data-count="${i}"]`);
+  if(label) label.textContent = total ? `${chosen} of ${total} selected` : "";
+  const btn = fileEl.querySelector(".staged-apply");
+  if(btn && total) btn.textContent = chosen ? `Apply ${chosen}` : "Apply none";
+}
+
+async function applyStaged(btn){
+  const fileEl = $(`.staged-file[data-file="${btn.dataset.file}"]`);
+  const file = stagedFiles[btn.dataset.file];
+  const selection = stagedSelection(fileEl);
+  btn.disabled = true; const old = btn.textContent; btn.textContent = "Applying…";
+  try{
+    const r = await fetch("/api/staged/apply", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({path: file.path, selection}),
+    });
+    const d = await r.json();
+    if(!r.ok || !d.ok){ toast(d.message || `Apply failed: ${r.status}`, true); btn.disabled=false; btn.textContent=old; return; }
+    const bits = [];
+    if(d.created) bits.push(`${d.created} created`);
+    if(d.updated) bits.push(`${d.updated} updated`);
+    if(d.skipped) bits.push(`${d.skipped} left`);
+    if(d.blocked) bits.push(`${d.blocked} blocked`);
+    toast(`${d.filename}: ${bits.join(", ") || "nothing to apply"}`);
+    await load();
+    await loadStaged();
+    renderStaged();
+    if(!stagedFiles.length) closeStagedModal();
+  }catch(e){ toast("Apply failed: "+e, true); btn.disabled=false; btn.textContent=old; }
+}
+
+async function openStagedModal(){
+  await loadStaged();
+  renderStaged();
+  $("#stagedScrim").classList.add("open"); $("#stagedModal").classList.add("open");
+}
+function closeStagedModal(){ $("#stagedScrim").classList.remove("open"); $("#stagedModal").classList.remove("open"); }
+$("#stagedBtn").addEventListener("click", openStagedModal);
+$("#stagedScrim").addEventListener("click", closeStagedModal);
 
 // ---------------- Role detail drawer ----------------
 let current = null;  // the role being viewed
@@ -1186,6 +1404,7 @@ $("#settingsBtn").addEventListener("click", ()=>{
 
 load();
 loadScanHealth();
+loadStaged();
 updateStickyOffsets();
 </script>
 </body>

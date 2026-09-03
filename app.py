@@ -31,6 +31,7 @@ import language_gate
 import numeric_fact_gate as ng
 import pdf_export
 import prompt_assembly as pa
+import staging
 import verifier
 from job_scanner import scan_all_companies_detailed, categorize_title
 
@@ -862,6 +863,61 @@ def api_scan_runs_latest():
         companies.append(d)
     conn.close()
     return jsonify({"run": {k: run[k] for k in run.keys()}, "companies": companies})
+
+
+# ------------------------------------------------------------------
+# Staged finds (see staging.py)
+# ------------------------------------------------------------------
+
+@app.get("/api/staged")
+def api_staged():
+    """Every pending staged file plus its diff, in one round trip — the
+    panel opens on a count, and a count you have to click to find out
+    whether it means anything is barely better than the silent folder this
+    replaces. Strictly read-only: nothing here writes, backs up or renames."""
+    files = []
+    for entry in staging.list_staged():
+        entry = dict(entry)
+        if not entry["error"]:
+            try:
+                entry["preview"] = staging.preview(entry["path"])
+            except staging.StagedPathError as exc:
+                entry["error"] = str(exc)
+        files.append(entry)
+    # An empty drop ([] — a sweep that legitimately found nothing) is listed
+    # but doesn't count: the badge exists to say "there is something here to
+    # decide on", and nagging about a file with no rows would teach you to
+    # ignore it.
+    pending = sum(1 for f in files if f["error"] or f["rows"])
+    return jsonify({"files": files, "pending": pending})
+
+
+@app.post("/api/staged/apply")
+def api_staged_apply():
+    """Apply one staged file. `selection` is a list of source-file row
+    indices (omit it for all of them). The path is resolved inside the
+    staging directory before anything opens it, so a crafted request can't
+    reach an arbitrary file."""
+    body = request.get_json(silent=True) or {}
+    selection = body.get("selection")
+    if selection is not None:
+        if not isinstance(selection, list) or not all(
+            isinstance(i, int) and not isinstance(i, bool) for i in selection
+        ):
+            return jsonify({"ok": False, "error": "bad_selection",
+                            "message": "selection must be a list of row indices."}), 400
+    try:
+        result = staging.ingest(body.get("path") or "", selection)
+    except staging.StagedPathError as exc:
+        print(f"[staged] rejected path {body.get('path')!r}: {exc}")
+        return jsonify({"ok": False, "error": "bad_path", "message": str(exc)}), 400
+    if not result.get("ok"):
+        return jsonify({"ok": False, "error": "unreadable",
+                        "message": result.get("error")}), 400
+    print(f"[staged] applied {result['filename']}: "
+          f"{result['created']} created, {result['updated']} updated, "
+          f"{result['skipped']} left unchecked")
+    return jsonify(result)
 
 
 # ------------------------------------------------------------------

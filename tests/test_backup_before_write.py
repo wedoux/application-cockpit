@@ -31,6 +31,7 @@ import db as dbmod
 import gmail_sweep_apply as gsa
 import merge_duplicate_roles as mdr
 import reconcile_tracker as rt
+import staging
 
 _WRITE_SQL_RE = re.compile(r"^\s*(insert|update|delete|replace)\b", re.IGNORECASE)
 
@@ -161,4 +162,19 @@ def test_reconcile_tracker_apply_plan_backs_up_before_writing(events):
         }],
     }
     rt.apply_plan(plan)
+    _assert_backup_precedes_write(events)
+
+
+def test_staging_ingest_backs_up_before_writing(events, tmp_path, monkeypatch):
+    """The ingest panel is a bulk-mutation entry point like any other — it
+    can create a dozen roles from one click, and cockpit.db is gitignored,
+    so its snapshot is the only way back."""
+    staged_dir = tmp_path / "staging"
+    staged_dir.mkdir()
+    monkeypatch.setattr(staging, "STAGING_DIR", staged_dir)
+    path = staged_dir / "creates.json"
+    path.write_text(json.dumps([{"company": "Order Test Co", "title": "Head of Design",
+                                  "url": "https://x/order-test"}]))
+
+    staging.ingest(path)
     _assert_backup_precedes_write(events)
