@@ -4,13 +4,23 @@ Third-party logic ported into this codebase, with attribution. Ideas-only
 influences (no code copied) are also recorded here so the boundary is
 explicit and doesn't have to be re-derived later.
 
-## Pending — not yet cleared
+## Origin
+
+This project grew out of the **UX for AI certification**, co-hosted by Greg
+Nudelman and Daria Kempka: <https://uxforai.com/c/certification>. The job scanner that
+seeded it was Greg's, given to the author during that course, and the habit of
+enforcing a guarantee with a gate in code rather than a line in a checklist came
+from the same place. Everything built on top is the author's own, with Greg's
+explicit blessing (see below).
+
+## Ported (code, with attribution)
 
 ### Greg Nudelman — Cybersecurity AI PM Scanner, five provider handlers
 **Where:** `job_scanner.py`
 **Source:** a personal job scanner Greg wrote for his own cybersecurity/AI PM
-search and gave directly to the author — not a public repository, no license
-attached, came with his own README documenting the tool.
+search and gave directly to the author during the UX for AI certification —
+not a public repository, no license attached, came with his own README
+documenting the tool.
 
 **Scope, both readings, because both are true:** `job_scanner.py` itself is
 roughly 30% his — five functions (`search_workday`, `search_greenhouse`,
@@ -39,16 +49,24 @@ since — an 8th provider (Oracle HCM), `robots.txt` compliance checking, scan
 observability, config-driven loading — has no relationship to his code.
 
 **Also relevant:** a CSV of his own real job-search history, kept in this
-project for reference since the original handoff, was found still present
-and has been removed before any wider sharing.
+project for reference since the original handoff, was found still present and
+removed before any wider sharing. It never entered this repository's git
+history — the repo was detached with fresh history on 2026-08-23 and the file
+was gone by then — so there is no blob of Greg's personal data in any commit
+here. Confirmed by scanning every blob in history, not just the working tree
+(see `check_privacy.py`, which does exactly this).
 
-**Status:** PENDING. Not covered by this repository's LICENSE. A personal
-gift between colleagues, not code released under any license — permission
-has been asked but not yet confirmed. If declined, the five functions above
-need independent rewriting before this repository can rely on this license
-covering all of its own code.
+**Status:** CLEARED. Permission granted by Greg Nudelman by email on
+2026-09-01: "whatever you developed is totally yours [...] please publish
+away." He asked for one thing in return, which this file and the README now
+do: that readers be told the work is connected with the UX for AI
+certification, and given the link — <https://uxforai.com/c/certification>.
 
-## Ported (code, with attribution)
+The five functions remain his work, ported with his consent rather than under
+a license. That distinction is worth keeping visible: this repository's
+LICENSE covers the author's own code, and Greg's contribution sits inside it
+by permission, not by grant. Anyone forking this repo inherits the author's
+license, not Greg's permission, and should treat those ~193 lines accordingly.
 
 ### career-ops — numeric normalization
 **Where:** `Job search tool/numeric_fact_gate.py`

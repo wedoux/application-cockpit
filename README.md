@@ -123,9 +123,13 @@ deliberately.
 
 ## Credits and licence
 
+This project came out of the [UX for AI certification](https://uxforai.com/c/certification),
+co-hosted by Greg Nudelman and Daria Kempka. The scanner that seeded it was Greg's, given
+to me during the course, and published here with his blessing.
+
 MIT, with one exception documented in [CREDITS.md](CREDITS.md): five of the provider
-handlers began as a scanner a former colleague wrote for his own search and gave me
-directly. They're still close to what he wrote, and they aren't mine to relicense.
+handlers began as that scanner Greg wrote for his own search and gave me directly.
+They're still close to what he wrote, and they aren't mine to relicense.
 
 `CREDITS.md` also records what I took from two MIT-licensed projects, and what I only
 took the idea of.
