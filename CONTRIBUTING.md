@@ -2,9 +2,9 @@
 
 This is a personal tool. I built it for my own job search and published it because parts of
 it might be useful to someone doing the same thing. It isn't a product, and I'm not looking
-for maintainers. Issues and pull requests are welcome, but they may sit for a while or get
-declined for reasons that only make sense inside my own search. Fork it instead if that's
-easier — no permission needed, and a fork going its own way beats a PR that waits.
+for maintainers. Issues and pull requests are welcome, but may sit for a while or get declined
+for reasons that only make sense inside my own search. Fork it instead if that's easier — no
+permission needed, and a fork going its own way beats a PR that waits.
 
 ## Five things that will bite you
 
@@ -23,22 +23,26 @@ time: pointing tests at a temp file silently did nothing, and "isolated" tests w
 data. If the guard fires, something is bypassing `db.connect()`, and that's the bug.
 
 **Call `db.backup_db()` before any bulk mutation of roles.** Every existing write path does —
-the scan, the tracker reconcile, the duplicate merge, `gmail_sweep_apply.py`, the ingest
-panel. `cockpit.db` is gitignored, so those snapshots are the only route back from a bad
-write. Pass a reason string; it lands in the filename, which is how you find the right one.
+the scan, the tracker reconcile, the duplicate merge, `gmail_sweep_apply.py`, the ingest panel.
+`cockpit.db` is gitignored, so those snapshots are the only route back from a bad write. Pass
+a reason string; it lands in the filename, which is how you find the right one.
 
 **Everything reaching `cockpit.db` goes through `gmail_sweep_apply.py`'s plan/apply
 functions.** Don't add a second duplicate-detection rule. `staging.py` calls into them rather
 than reimplementing, so a role blocked in the ingest panel is blocked by the same
-`app._find_duplicate` the manual-add button uses. Two rules would drift, and what counts as a
+`app._find_duplicate` the manual-add button uses. Two rules would drift, and what counted as a
 duplicate would start depending on which door a role came through.
 
 **Copy `.privacy-tokens.example` to `.privacy-tokens` and run `check_privacy.py` before
-pushing a fork.** It scans the working tree and every blob in git history as raw bytes, so it
-sees inside a SQLite snapshot or a PDF that a text diff reports only as "binary files
-differ". A leak found after a push can't be unpublished.
+pushing a fork.** It reads the working tree and every blob in git history as raw bytes, so it
+sees inside a SQLite snapshot or a PDF that a text diff reports only as "binary files differ".
+Hits in gitignored files are reported without failing — your `cockpit.db` and `config.yaml`
+hold real data by design. A non-zero exit means something publishable has a hit: tracked,
+reachable in history, or untracked and not ignored. Deliberate exceptions go in
+`.privacy-allowlist`, which drops them from the exit code and keeps printing them anyway. A
+leak found after a push can't be unpublished.
 
-312 tests, about 40 seconds (`python -m pytest`). Green before your change, green after.
+322 tests, under a minute (`python -m pytest`). Green before your change, green after.
 
 ## What I'll decline
 
@@ -47,17 +51,16 @@ no code path that could" is a guarantee rather than a current default, and the r
 design leans on it.
 
 **Aggregator scraping.** I looked into it and stopped: their `robots.txt` disallows the API
-path, their terms of use prohibit automated access, and a single unauthenticated request came
-back classified as a bot.
+path, their terms prohibit automated access, and a single unauthenticated request came back
+classified as a bot.
 
-**Volume features** — bulk apply, queue-everything, anything that makes it cheaper to send
-more. The design premise is fewer applications, each one checkable.
+**Volume features** — bulk apply, queue-everything, anything making it cheaper to send more.
+The design premise is fewer applications, each one checkable.
 
 ## Adding an ATS provider
 
-This is the contribution I'd most like to get.
-
-Write `search_<portal>(company_name, target)` returning `(raw, msg)`, then add a branch to
+This is the contribution I'd most like to get. Write `search_<portal>(company_name, target)`
+returning `(raw, msg)`, then add a branch to
 the dispatch in `scan_all_companies_detailed`. Copy `search_workable` or `search_oracle_hcm`
 as your model — read the boundary note below before copying one of the other five. Targeting
 lives in `config.yaml` under `scanner.companies` (each entry a `company`, `handler` and
@@ -76,5 +79,5 @@ is in `tests/test_job_scanner.py` and `tests/test_scanner_config.py`.
 `search_lever`, `search_ashby`, `search_smartrecruiters`, roughly 193 lines — began as a
 scanner Greg Nudelman wrote for his own search and gave me directly. They're here by his
 written permission, not under this repository's MIT licence. If you touch those five, or
-rewrite them to remove the dependency, update `CREDITS.md` in the same commit. That boundary
-is recorded in one file you might otherwise never open, which is why it's repeated here.
+rewrite them to drop the dependency, update `CREDITS.md` in the same commit. That boundary is
+recorded in one file you might otherwise never open, which is why it's repeated here.

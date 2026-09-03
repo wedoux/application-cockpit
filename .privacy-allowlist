@@ -1,0 +1,18 @@
+# Paths whose privacy-check hits are deliberate and acknowledged.
+#
+# Safe to commit, and committed on purpose: this file names PATHS, never
+# personal data, so it can be reviewed by anyone who can see the repo. That
+# is the opposite of .privacy-tokens, which holds the identifiers themselves
+# and must stay gitignored.
+#
+# An allowlisted path is excluded from the exit code but still printed in
+# the report, marked as allowlisted. Nothing here disappears — allowlisting
+# is by path, so a file on this list could later gain a token nobody
+# intended, and the hit staying visible is what keeps that honest.
+#
+# One path per line, relative to the repo root. Write the reason above the
+# entry. A missing entry is a failing run, which is the right default.
+
+# An MIT licence has to name its copyright holder. "Copyright (c) 2026
+# <real name>" is the file doing its job, not a leak.
+LICENSE

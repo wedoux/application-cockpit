@@ -222,3 +222,163 @@ def test_main_uses_an_explicit_tokens_file_via_flag(tmp_path, monkeypatch):
     monkeypatch.setattr("sys.argv",
                          ["check_privacy.py", str(tmp_path), "--tokens", str(tokens_file)])
     assert cp.main() == 1
+
+
+# ------------------------------------------------------------------
+# Classification — would git publish this?
+# ------------------------------------------------------------------
+# The script used to exit non-zero on any hit anywhere. On any machine that
+# has actually run the app that means permanently red — cockpit.db,
+# backups/, config.yaml and .env all hold real data by design — and a gate
+# that can never go green is one people learn to ignore. Hits are still all
+# printed; only publishable ones fail.
+
+def _repo_with(tmp_path, files, gitignore=None, commit=(), allowlist=None):
+    """A throwaway repo. `files` is {path: text}; `commit` names which of
+    them to actually track."""
+    _init_repo(tmp_path)
+    if gitignore is not None:
+        (tmp_path / ".gitignore").write_text(gitignore)
+    if allowlist is not None:
+        (tmp_path / ".privacy-allowlist").write_text(allowlist)
+    for name, text in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    for name in commit:
+        _git(tmp_path, "add", "-f", name)
+    if commit:
+        _git(tmp_path, "commit", "-q", "-m", "fixture")
+    return tmp_path
+
+
+def _run(tmp_path, monkeypatch, capsys):
+    (tmp_path / ".privacy-tokens").write_text("\n".join(FAKE_TOKENS) + "\n")
+    monkeypatch.setattr("sys.argv", ["check_privacy.py", str(tmp_path)])
+    rc = cp.main()
+    return rc, capsys.readouterr().out
+
+
+def test_a_tracked_file_with_a_hit_fails(tmp_path, monkeypatch, capsys):
+    _repo_with(tmp_path, {"config.yaml": "email: fake.person@example.com\n"},
+               commit=["config.yaml"])
+    rc, out = _run(tmp_path, monkeypatch, capsys)
+    assert rc == 1
+    assert "TRACKED" in out and "FAILED" in out
+    assert "config.yaml" in out
+
+
+def test_a_history_blob_with_a_hit_fails_even_when_the_tree_is_clean(
+    tmp_path, monkeypatch, capsys
+):
+    """The scenario the history scan exists for: committed, then deleted.
+    Classification must not soften this — the blob is still reachable."""
+    _repo_with(tmp_path, {"scan.log": "fake.person@example.com\n"}, commit=["scan.log"])
+    (tmp_path / "scan.log").unlink()
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "remove")
+
+    rc, out = _run(tmp_path, monkeypatch, capsys)
+    assert rc == 1
+    assert "GIT HISTORY" in out
+    assert "scan.log" in out, "the blob should be named by the path it was committed under"
+
+
+def test_a_gitignored_file_with_a_hit_passes_and_is_still_reported(
+    tmp_path, monkeypatch, capsys
+):
+    """cockpit.db and .env hold real data on every working machine. Reported
+    so you can see them, forgiven so the gate stays usable."""
+    _repo_with(tmp_path,
+               {"cockpit.db": "fake.person@example.com\n", "app.py": "print(1)\n"},
+               gitignore="cockpit.db\n", commit=["app.py", ".gitignore"])
+    rc, out = _run(tmp_path, monkeypatch, capsys)
+    assert rc == 0
+    assert "GITIGNORED" in out
+    assert "cockpit.db" in out, "forgiven is not the same as hidden"
+    assert "PASS" in out
+
+
+def test_an_untracked_unignored_file_with_a_hit_fails(tmp_path, monkeypatch, capsys):
+    """The dangerous middle case, and the one a plain tracked/untracked
+    split would drop: a stray notes.txt nobody has added yet is one
+    `git add -A` from being published."""
+    _repo_with(tmp_path, {"app.py": "print(1)\n", "notes.txt": "Fakename Surname\n"},
+               commit=["app.py"])
+    rc, out = _run(tmp_path, monkeypatch, capsys)
+    assert rc == 1
+    assert "UNTRACKED" in out
+    assert "notes.txt" in out
+
+
+def test_an_allowlisted_tracked_file_passes_but_is_still_printed(
+    tmp_path, monkeypatch, capsys
+):
+    """An MIT licence has to carry the copyright holder's real name. The
+    allowlist acknowledges that once — and keeps printing it, because the
+    entry names a path rather than a value, so the file could later gain a
+    token nobody intended."""
+    _repo_with(tmp_path, {"LICENSE": "Copyright (c) 2026 Fakename Surname\n"},
+               commit=["LICENSE"], allowlist="# the licence names its holder\nLICENSE\n")
+    _git(tmp_path, "add", ".privacy-allowlist")
+    _git(tmp_path, "commit", "-q", "-m", "allowlist")
+
+    rc, out = _run(tmp_path, monkeypatch, capsys)
+    assert rc == 0
+    assert "ALLOWLISTED" in out
+    assert "LICENSE" in out and "Fakename Surname" in out
+
+
+def test_an_absent_allowlist_is_not_an_error(tmp_path, monkeypatch, capsys):
+    """A fresh fork has no allowlist and must still run — unlike
+    .privacy-tokens, whose absence stops the check."""
+    assert cp.load_allowlist(tmp_path / "nope") == set()
+    _repo_with(tmp_path, {"app.py": "print(1)\n"}, commit=["app.py"])
+    rc, out = _run(tmp_path, monkeypatch, capsys)
+    assert rc == 0
+
+
+def test_load_allowlist_skips_comments_and_blank_lines(tmp_path):
+    f = tmp_path / ".privacy-allowlist"
+    f.write_text("# why this one\nLICENSE\n\n  ./docs/AUTHORS.md  \n")
+    assert cp.load_allowlist(f) == {"LICENSE", "docs/AUTHORS.md"}
+
+
+def test_allowlisting_one_path_does_not_excuse_the_same_blob_elsewhere(
+    tmp_path, monkeypatch, capsys
+):
+    """Identical content committed as LICENSE and as secrets.txt is one
+    blob. The LICENSE entry must not launder the other path."""
+    text = "Copyright (c) 2026 Fakename Surname\n"
+    _repo_with(tmp_path, {"LICENSE": text, "secrets.txt": text},
+               commit=["LICENSE", "secrets.txt"],
+               allowlist="LICENSE\n")
+    rc, out = _run(tmp_path, monkeypatch, capsys)
+    assert rc == 1
+    assert "secrets.txt" in out
+
+
+def test_a_tracked_file_that_gitignore_also_matches_still_fails(
+    tmp_path, monkeypatch, capsys
+):
+    """git tracks what it tracks; a later .gitignore pattern doesn't
+    unpublish an already-tracked file."""
+    _repo_with(tmp_path, {"config.yaml": "fake.person@example.com\n"},
+               gitignore="config.yaml\n", commit=["config.yaml", ".gitignore"])
+    rc, out = _run(tmp_path, monkeypatch, capsys)
+    assert rc == 1
+    assert "TRACKED" in out
+
+
+def test_the_not_a_git_repo_guard_still_fails_hard(tmp_path, monkeypatch, capsys):
+    """Classification needs git to tell published from local, so a target
+    with no git can forgive nothing — and a history it never reached must
+    still raise rather than report clean."""
+    (tmp_path / ".privacy-tokens").write_text("fake.person@example.com\n")
+    (tmp_path / "cockpit.db").write_text("fake.person@example.com")
+    monkeypatch.setattr("sys.argv", ["check_privacy.py", str(tmp_path)])
+    rc = cp.main()
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "history not checked" in out
+    assert "cockpit.db" in out
