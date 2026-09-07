@@ -34,15 +34,16 @@ than reimplementing, so a role blocked in the ingest panel is blocked by the sam
 duplicate would start depending on which door a role came through.
 
 **Copy `.privacy-tokens.example` to `.privacy-tokens` and run `check_privacy.py` before
-pushing a fork.** It reads the working tree and every blob in git history as raw bytes, so it
-sees inside a SQLite snapshot or a PDF that a text diff reports only as "binary files differ".
+pushing a fork.** It reads the working tree as raw bytes, so it sees inside a SQLite snapshot
+or a PDF that a text diff reports only as "binary files differ", and it reads git history the
+same way — file content, commit messages and tag messages, which a diff view never shows you.
 Hits in gitignored files are reported without failing — your `cockpit.db` and `config.yaml`
 hold real data by design. A non-zero exit means something publishable has a hit: tracked,
 reachable in history, or untracked and not ignored. Deliberate exceptions go in
 `.privacy-allowlist`, which drops them from the exit code and keeps printing them anyway. A
 leak found after a push can't be unpublished.
 
-342 tests, under a minute (`python -m pytest`). Green before your change, green after.
+353 tests, about a minute (`python -m pytest`). Green before your change, green after.
 
 ## What I'll decline
 

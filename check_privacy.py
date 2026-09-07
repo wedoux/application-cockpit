@@ -20,14 +20,40 @@ own — same pattern as `.env`/`.env.example` already used in this project.
 Scans a target directory two ways:
   1. The current working tree (every file, read as raw bytes so binary
      files — a SQLite snapshot, a PDF — are checked too, not skipped).
-  2. The full git history — every blob ever committed, via `git cat-file`,
-     not just `git log -p`'s text diffs (which show "Binary files ...
-     differ" for a binary blob and never search its actual content). This
-     is exactly how a past commit's personal data was found here in the
-     first place: `cockpit.db.bak` and `scan.log` were removed from the
-     working tree in a later commit, but their content is still
-     retrievable from the commit that added them — `git log -p` alone
-     would never have caught that.
+  2. The full git history, via `git cat-file --batch-all-objects`, not
+     `git log -p`'s text diffs (which show "Binary files ... differ" for a
+     binary blob and never search its actual content). This is exactly how
+     a past commit's personal data was found here in the first place:
+     `cockpit.db.bak` and `scan.log` were removed from the working tree in
+     a later commit, but their content is still retrievable from the
+     commit that added them — `git log -p` alone would never have caught
+     that.
+
+     Three object types are read, and the report never flattens them
+     together, because a hit in each needs a different fix:
+       * blob   — file content. Fix: get the file out of history.
+       * commit — the message. Fix: rewrite the message.
+       * tag    — the message. Fix: retag.
+     Commit and tag messages went unchecked until 2026-09-07, which left
+     commit-message discipline as the one rule in this project enforced by
+     remembering rather than by a gate — the shape this docstring argues
+     against three paragraphs up. A leak in a message is as permanent as
+     one in a file and considerably harder to notice: no diff view shows
+     it, and nobody reads history.
+
+     Of a commit or tag, the message and the author/committer ADDRESS are
+     scanned; the author NAME is not. That asymmetry is deliberate and
+     documented in PUBLIC-REPO-EXTRACTION-PLAN.md §9.1 — the real name
+     stays in git history on purpose ("portfolio piece, meant to carry
+     it"), so scanning it would fail every commit forever over a decision
+     that was made knowingly. The address is the opposite: it was replaced
+     with a GitHub no-reply one precisely because public history is
+     permanent and scraped, so it stays checked.
+
+     Tree objects are NOT scanned, so a token in a FILENAME rather than in
+     file content is still invisible to this script — in history and in
+     the working tree, which greps content and reports the path without
+     checking it. Known gap, not yet closed.
 
      If target_dir isn't itself a git repository (no `.git`), the history
      scan RAISES (NotAGitRepoError) rather than silently reporting "0
@@ -60,7 +86,10 @@ So each hit is classified by whether git would publish it:
 Exit code is non-zero if anything in the first two classes has a hit.
 
 `.privacy-allowlist` (committed, one path per line, # comments) acknowledges
-the deliberate exceptions — an MIT LICENCE has to carry the copyright
+the deliberate exceptions. It applies to blobs ONLY: it names paths, and a
+commit or tag message has no path to name, so there is nothing to review an
+exception against — a real leak in a message must not have a quiet route to
+being forgiven. Those fail, always. It acknowledges — an MIT LICENCE has to carry the copyright
 holder's real name, and re-triaging that every run is how a gate becomes
 furniture. An allowlisted path is excluded from the exit code but STILL
 PRINTED, clearly marked. That matters: the allowlist names paths, not
@@ -182,19 +211,80 @@ def scan_git_history(repo_dir, tokens):
          "--batch-check=%(objecttype) %(objectname)"],
         capture_output=True, text=True, check=True,
     )
-    blob_shas = [line.split()[1] for line in check.stdout.splitlines()
-                 if line.startswith("blob ")]
+    wanted = []
+    for line in check.stdout.splitlines():
+        objtype, _, sha = line.partition(" ")
+        if objtype in SCANNED_OBJECT_TYPES:
+            wanted.append((objtype, sha.strip()))
 
     findings = []
-    for sha in blob_shas:
+    for objtype, sha in wanted:
         result = subprocess.run(
             ["git", "-C", str(repo_dir), "cat-file", "-p", sha],
             capture_output=True, check=True,
         )
-        hits = _token_hits(result.stdout, tokens)
+        hits = _token_hits(_scannable(objtype, result.stdout), tokens)
         if hits:
-            findings.append((sha, hits))
+            findings.append({
+                "sha": sha,
+                "type": objtype,
+                "hits": hits,
+                "label": _message_subject(result.stdout) if objtype != BLOB else None,
+            })
     return findings
+
+
+def _split_object(raw):
+    """A commit or tag object is headers, a blank line, then the message.
+    Returns (headers, message) as bytes; message is empty if the object
+    doesn't have that shape."""
+    head, sep, body = raw.partition(b"\n\n")
+    return (head, body) if sep else (raw, b"")
+
+
+def _identity_emails(headers):
+    """The addresses on author/committer/tagger lines, without the names.
+
+    The NAME on those lines is deliberately the real one — see
+    PUBLIC-REPO-EXTRACTION-PLAN.md §9.1, "the name stays (portfolio piece,
+    meant to carry it)" — so scanning it would fail every commit forever
+    for a decision that was made on purpose, which is precisely the
+    permanently-red gate this script was fixed not to be.
+
+    The ADDRESS is the opposite: §9.1 replaced the real one with a GitHub
+    no-reply address exactly because public git history is permanent and
+    scraped. Excluding the whole header to spare the name would leave that
+    unchecked, so the address is pulled back out and scanned on its own.
+    """
+    out = []
+    for line in headers.split(b"\n"):
+        field = line.split(b" ", 1)[0]
+        if field in (b"author", b"committer", b"tagger"):
+            start, end = line.find(b"<"), line.rfind(b">")
+            if 0 <= start < end:
+                out.append(line[start + 1:end])
+    return out
+
+
+def _scannable(objtype, raw):
+    """The bytes of an object that a privacy check should actually read.
+
+    A blob is its whole content. A commit or tag is its message plus the
+    identity addresses — everything except the deliberate real name, which
+    _identity_emails explains."""
+    if objtype == BLOB:
+        return raw
+    headers, message = _split_object(raw)
+    return b"\n".join([message, *_identity_emails(headers)])
+
+
+def _message_subject(raw):
+    """First line of a commit's or tag's message, for naming the object in
+    the report. Returns None rather than guessing if the object doesn't
+    have the expected shape."""
+    _, message = _split_object(raw)
+    subject = message.split(b"\n", 1)[0].decode("utf-8", "replace").strip()
+    return subject[:72] or None
 
 
 # ------------------------------------------------------------------
@@ -204,6 +294,22 @@ def scan_git_history(repo_dir, tokens):
 TRACKED = "tracked"
 UNTRACKED = "untracked"
 IGNORED = "ignored"
+
+# Git object types the history scan reads. Blobs are file content; commits
+# and tags are message text nothing has ever checked. Trees are deliberately
+# not here — see the docstring's note on filenames.
+BLOB, COMMIT, TAG = "blob", "commit", "tag"
+SCANNED_OBJECT_TYPES = (BLOB, COMMIT, TAG)
+
+# What each type means in the report. A hit in a file and a hit in a commit
+# message are different problems with different fixes — one needs the file
+# removed from history, the other needs the message rewritten — so they are
+# never flattened into one "history" bucket.
+OBJECT_TYPE_LABELS = {
+    BLOB: "file content",
+    COMMIT: "commit message",
+    TAG: "tag message",
+}
 
 # Which classes are publishable, and so fail the run. Gitignored files are
 # reported and forgiven; everything else is one command away from a push.
@@ -303,14 +409,20 @@ def classify(repo_dir, tree_findings, history_findings, allowlist=()):
 
     blob_map = history_blob_paths(repo_dir)
     history = []
-    for sha, hits in history_findings:
-        paths = sorted(blob_map.get(sha, ()))
-        # Every path the blob ever lived at must be allowlisted, not just
-        # one: the same content committed once as LICENSE and once as
+    for finding in history_findings:
+        objtype = finding["type"]
+        paths = sorted(blob_map.get(finding["sha"], ())) if objtype == BLOB else []
+        # ONLY a blob can be allowlisted, and the check is explicit rather
+        # than falling out of "it has no path". The allowlist names paths;
+        # a commit message has none, so there is nothing to name and no way
+        # to review the exception — and a real leak in a message is exactly
+        # the thing that must not have a quiet route to being forgiven.
+        # Every path the blob ever lived at must be listed, not just one:
+        # the same content committed once as LICENSE and once as
         # secrets.txt is not excused by the LICENSE entry.
-        allowlisted = bool(paths) and all(p in allowlist for p in paths)
-        history.append({"sha": sha, "hits": hits, "paths": paths,
-                        "allowlisted": allowlisted})
+        allowlisted = (objtype == BLOB and bool(paths)
+                       and all(p in allowlist for p in paths))
+        history.append({**finding, "paths": paths, "allowlisted": allowlisted})
     return tree, history
 
 
@@ -420,19 +532,27 @@ def _print_report(tree, history):
             print(f"  {f['path']}: {', '.join(f['hits'])}")
         print()
 
-    bad = [f for f in history if not f["allowlisted"]]
-    ok = [f for f in history if f["allowlisted"]]
-    for group, heading, verdict in (
-        (bad, "GIT HISTORY — reachable in history", "FAIL"),
-        (ok, "GIT HISTORY — allowlisted, still shown", "ok"),
-    ):
-        if not group:
-            continue
-        print(f"{heading} [{verdict}] — {len(group)} blob(s):")
-        for f in group:
-            where = f" ({', '.join(f['paths'])})" if f["paths"] else " (no path in reachable history)"
-            print(f"  {f['sha']}{where}: {', '.join(f['hits'])}")
-        print()
+    # Split by object type, never flattened: a hit in a file needs the file
+    # removed from history, a hit in a commit message needs the message
+    # rewritten. Different problems, different fixes, different headings.
+    for objtype in SCANNED_OBJECT_TYPES:
+        of_type = [f for f in history if f["type"] == objtype]
+        what = OBJECT_TYPE_LABELS[objtype]
+        for group, suffix, verdict in (
+            ([f for f in of_type if not f["allowlisted"]], "reachable in history", "FAIL"),
+            ([f for f in of_type if f["allowlisted"]], "allowlisted, still shown", "ok"),
+        ):
+            if not group:
+                continue
+            print(f"GIT HISTORY — {what}, {suffix} [{verdict}] — {len(group)} object(s):")
+            for f in group:
+                if f["type"] == BLOB:
+                    where = (f" ({', '.join(f['paths'])})" if f["paths"]
+                             else " (no path in reachable history)")
+                else:
+                    where = f" ({f['label']})" if f["label"] else ""
+                print(f"  {f['sha']}{where}: {', '.join(f['hits'])}")
+            print()
 
 
 if __name__ == "__main__":

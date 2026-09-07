@@ -96,7 +96,7 @@ brew install poppler                 # or: apt install poppler-utils
 cp config.yaml.example config.yaml
 cp .env.example .env                 # add your ANTHROPIC_API_KEY
 
-python -m pytest                     # 342 passed
+python -m pytest                     # 353 passed
 python app.py                        # http://127.0.0.1:8766
 ```
 

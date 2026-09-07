@@ -146,7 +146,8 @@ def test_scan_git_history_finds_a_token_removed_from_the_working_tree():
         assert cp.scan_working_tree(repo, FAKE_TOKENS) == []  # clean now
         history_findings = cp.scan_git_history(repo, FAKE_TOKENS)  # but not ever
         assert len(history_findings) == 1
-        assert "fake.person@example.com" in history_findings[0][1]
+        assert history_findings[0]["type"] == cp.BLOB
+        assert "fake.person@example.com" in history_findings[0]["hits"]
 
 
 def test_scan_git_history_is_clean_on_a_generic_repo():
@@ -382,3 +383,158 @@ def test_the_not_a_git_repo_guard_still_fails_hard(tmp_path, monkeypatch, capsys
     assert rc == 1
     assert "history not checked" in out
     assert "cockpit.db" in out
+
+
+# ------------------------------------------------------------------
+# Commit and tag messages
+# ------------------------------------------------------------------
+# Until 2026-09-07 scan_git_history filtered cat-file --batch-all-objects
+# down to blobs, so no commit message in any repository had ever been read
+# by this script. That left commit-message discipline as the one rule here
+# enforced by remembering rather than by a gate. A leak in a message is as
+# permanent as one in a file and harder to spot: no diff view shows it.
+
+def _commit_with_message(repo_dir, message, filename="app.py", content="print(1)\n"):
+    (repo_dir / filename).write_text(content)
+    _git(repo_dir, "add", filename)
+    _git(repo_dir, "commit", "-q", "-m", message)
+
+
+def test_a_token_in_a_commit_message_is_found(tmp_path):
+    _init_repo(tmp_path)
+    _commit_with_message(tmp_path, "Add scraper for fake.person@example.com's inbox")
+
+    findings = cp.scan_git_history(tmp_path, FAKE_TOKENS)
+    assert len(findings) == 1
+    assert findings[0]["type"] == cp.COMMIT
+    assert "fake.person@example.com" in findings[0]["hits"]
+
+
+def test_a_token_in_a_commit_message_fails_the_run(tmp_path, monkeypatch, capsys):
+    _init_repo(tmp_path)
+    _commit_with_message(tmp_path, "Wire up Fakename Surname's dashboard")
+    rc, out = _run(tmp_path, monkeypatch, capsys)
+    assert rc == 1
+    assert "commit message" in out
+    assert "Fakename Surname" in out
+
+
+def test_a_token_in_a_tag_message_is_found(tmp_path):
+    _init_repo(tmp_path)
+    _commit_with_message(tmp_path, "clean message")
+    # -m makes an annotated tag, which is a real object with its own
+    # message; a lightweight tag is just a ref and has nothing to scan.
+    _git(tmp_path, "tag", "-a", "v1.0", "-m", "cut for fake.person@example.com")
+
+    findings = cp.scan_git_history(tmp_path, FAKE_TOKENS)
+    assert [f["type"] for f in findings] == [cp.TAG]
+    assert "fake.person@example.com" in findings[0]["hits"]
+
+
+def test_the_object_type_is_reported_distinctly_from_a_blob_hit(tmp_path, monkeypatch, capsys):
+    """A hit in a file needs the file removed from history; a hit in a
+    message needs the message rewritten. Flattening them into one bucket
+    would hide which fix applies."""
+    _init_repo(tmp_path)
+    _commit_with_message(tmp_path, "Import Fakename Surname's notes",
+                          filename="leak.txt", content="fake.person@example.com\n")
+
+    rc, out = _run(tmp_path, monkeypatch, capsys)
+    assert rc == 1
+    assert "file content" in out
+    assert "commit message" in out
+    assert out.index("file content") != out.index("commit message")
+
+
+def test_the_commit_subject_is_shown_so_the_object_can_be_found(tmp_path, monkeypatch, capsys):
+    """A bare sha sends you to `git show`; the subject says which commit."""
+    _init_repo(tmp_path)
+    _commit_with_message(tmp_path, "Wire up Fakename Surname's dashboard")
+    _, out = _run(tmp_path, monkeypatch, capsys)
+    assert "Wire up Fakename Surname's dashboard" in out
+
+
+def test_a_clean_message_on_a_dirty_blob_does_not_report_a_commit_hit(tmp_path):
+    _init_repo(tmp_path)
+    _commit_with_message(tmp_path, "add a file",
+                          filename="leak.txt", content="fake.person@example.com\n")
+    findings = cp.scan_git_history(tmp_path, FAKE_TOKENS)
+    assert [f["type"] for f in findings] == [cp.BLOB]
+
+
+# ------------------------------------------------------------------
+# The author identity: name excluded, address checked
+# ------------------------------------------------------------------
+
+def test_the_deliberate_author_name_does_not_fail_every_commit(tmp_path, monkeypatch, capsys):
+    """PUBLIC-REPO-EXTRACTION-PLAN.md §9.1 keeps the real NAME in history on
+    purpose. Scanning it would fail every commit forever over a decision
+    made knowingly — the permanently-red gate this script was fixed not to
+    be. Without this exclusion the repo's own history fails 19 times."""
+    _init_repo(tmp_path)
+    _git(tmp_path, "config", "user.name", "Fakename Surname")
+    _commit_with_message(tmp_path, "a clean message")
+
+    assert cp.scan_git_history(tmp_path, FAKE_TOKENS) == []
+    rc, _ = _run(tmp_path, monkeypatch, capsys)
+    assert rc == 0
+
+
+def test_the_author_address_is_still_checked(tmp_path, monkeypatch, capsys):
+    """Excluding the whole header to spare the name would leave the address
+    unchecked — and replacing a real address with a no-reply one is exactly
+    what §9.1 did, because public history is permanent and scraped."""
+    _init_repo(tmp_path)
+    _git(tmp_path, "config", "user.email", "fake.person@example.com")
+    _commit_with_message(tmp_path, "a clean message")
+
+    findings = cp.scan_git_history(tmp_path, FAKE_TOKENS)
+    assert [f["type"] for f in findings] == [cp.COMMIT]
+    assert "fake.person@example.com" in findings[0]["hits"]
+    rc, _ = _run(tmp_path, monkeypatch, capsys)
+    assert rc == 1
+
+
+# ------------------------------------------------------------------
+# Allowlisting a commit is impossible by construction
+# ------------------------------------------------------------------
+
+def test_a_commit_message_can_never_be_allowlisted(tmp_path, monkeypatch, capsys):
+    """The allowlist names paths and a commit has none, so there is nothing
+    to review an exception against. A real leak in a message must not have
+    a quiet route to being forgiven."""
+    _init_repo(tmp_path)
+    _commit_with_message(tmp_path, "Wire up Fakename Surname's dashboard")
+    sha = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    # Try every plausible way someone might reach for an exception.
+    (tmp_path / ".privacy-allowlist").write_text(f"{sha}\nHEAD\n.\n*\n")
+
+    rc, out = _run(tmp_path, monkeypatch, capsys)
+    assert rc == 1, "a commit hit must fail however the allowlist is written"
+    assert "allowlisted" not in out.split("commit message")[1].split("\n")[0]
+
+
+def test_classify_marks_a_commit_finding_unallowlistable(tmp_path):
+    _init_repo(tmp_path)
+    _commit_with_message(tmp_path, "Wire up Fakename Surname's dashboard")
+    tree_findings = cp.scan_working_tree(tmp_path, FAKE_TOKENS)
+    history_findings = cp.scan_git_history(tmp_path, FAKE_TOKENS)
+
+    _, history = cp.classify(tmp_path, tree_findings, history_findings, allowlist={"anything"})
+    assert [f["type"] for f in history] == [cp.COMMIT]
+    assert history[0]["allowlisted"] is False
+    assert history[0]["paths"] == []
+
+
+def test_a_blob_is_still_allowlistable(tmp_path, monkeypatch, capsys):
+    """The blob path keeps working — LICENSE is the reason the allowlist
+    exists at all."""
+    _repo_with(tmp_path, {"LICENSE": "Copyright (c) 2026 Fakename Surname\n"},
+               commit=["LICENSE"], allowlist="LICENSE\n")
+    _git(tmp_path, "add", ".privacy-allowlist")
+    _git(tmp_path, "commit", "-q", "-m", "add allowlist")
+
+    rc, out = _run(tmp_path, monkeypatch, capsys)
+    assert rc == 0
+    assert "file content, allowlisted" in out
