@@ -43,7 +43,9 @@ reachable in history, or untracked and not ignored. Deliberate exceptions go in
 `.privacy-allowlist`, which drops them from the exit code and keeps printing them anyway. A
 leak found after a push can't be unpublished.
 
-353 tests, about a minute (`python -m pytest`). Green before your change, green after.
+355 tests, about a minute (`python -m pytest`). Three of them skip until you map a CV
+for all three categories and have a real `cockpit.db`, so a fresh clone prints 352 passed,
+3 skipped. Green before your change, green after.
 
 ## What I'll decline
 

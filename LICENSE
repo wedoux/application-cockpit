@@ -22,7 +22,14 @@ SOFTWARE.
 
 ---
 
-This license covers this project's own code and the third-party code ported
-into it with attribution under compatible terms. It does NOT cover the code
-identified in CREDITS.md as pending permission — see that file before relying
-on this grant for the whole repository.
+The MIT grant above covers this project's own code, and the third-party code
+ported into it with attribution under compatible terms.
+
+One exception, documented in full in CREDITS.md. Five ATS provider handlers
+in job_scanner.py — search_workday, search_greenhouse, search_lever,
+search_ashby and search_smartrecruiters, roughly 193 lines — began as a
+personal job scanner Greg Nudelman wrote for his own search and gave to the
+author directly. They are published here with his written permission, which
+is not the same thing as a licence he granted. Fork this repository and you
+inherit the MIT grant over everything else; for those five functions, read
+CREDITS.md before relying on it.

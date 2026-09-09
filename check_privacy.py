@@ -387,6 +387,29 @@ def history_blob_paths(repo_dir):
     return mapping
 
 
+def index_blob_paths(repo_dir):
+    """sha -> path for everything currently staged.
+
+    `git add` writes a blob into the object database immediately, but
+    `rev-list --objects` only walks commits, so a staged-not-yet-committed
+    blob has no name until it lands in one. Without this, editing an
+    allowlisted file and staging it made the run fail — the blob was
+    unnameable, so it could not be allowlisted — which is a gate crying
+    wolf at exactly the moment it is supposed to be run.
+    """
+    out = _git_bytes(repo_dir, "ls-files", "--stage", "-z")
+    mapping = {}
+    for entry in out.split(b"\x00"):
+        if not entry:
+            continue
+        meta, _, path = entry.partition(b"\t")
+        parts = meta.split()
+        if len(parts) >= 2 and path:
+            mapping.setdefault(parts[1].decode(), set()).add(
+                path.decode("utf-8", "surrogateescape"))
+    return mapping
+
+
 def classify(repo_dir, tree_findings, history_findings, allowlist=()):
     """Annotate raw findings with publishability. Returns (tree, history),
     lists of dicts — nothing is dropped, only labelled."""
@@ -407,7 +430,11 @@ def classify(repo_dir, tree_findings, history_findings, allowlist=()):
         tree.append({"path": path, "hits": hits, "class": klass,
                      "allowlisted": path in allowlist})
 
+    # History names most blobs; the index names the ones staged but not yet
+    # committed. Both are places a blob can legitimately get its path from.
     blob_map = history_blob_paths(repo_dir)
+    for sha, paths in index_blob_paths(repo_dir).items():
+        blob_map.setdefault(sha, set()).update(paths)
     history = []
     for finding in history_findings:
         objtype = finding["type"]

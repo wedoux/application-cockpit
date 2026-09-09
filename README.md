@@ -96,9 +96,14 @@ brew install poppler                 # or: apt install poppler-utils
 cp config.yaml.example config.yaml
 cp .env.example .env                 # add your ANTHROPIC_API_KEY
 
-python -m pytest                     # 353 passed
+python -m pytest                     # 352 passed, 3 skipped
 python app.py                        # http://127.0.0.1:8766
 ```
+
+Optional, macOS only: `bash launcher-src/build.sh` compiles the double-clickable
+`Application Cockpit.app`. The compiled binary isn't committed — it would be unsigned,
+so Gatekeeper would block it on your machine anyway, and you couldn't check it matched
+the Swift source next to it.
 
 The database creates itself on the first request, however you serve the app. Out of the
 box it ships a sample profile, a fictional master CV, and three example companies, so a

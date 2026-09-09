@@ -538,3 +538,34 @@ def test_a_blob_is_still_allowlistable(tmp_path, monkeypatch, capsys):
     rc, out = _run(tmp_path, monkeypatch, capsys)
     assert rc == 0
     assert "file content, allowlisted" in out
+
+
+def test_a_staged_edit_to_an_allowlisted_file_still_passes(tmp_path, monkeypatch, capsys):
+    """`git add` writes the blob immediately, but rev-list --objects only
+    walks commits, so a staged-not-yet-committed blob has no path to match
+    the allowlist against. Editing LICENSE and staging it used to fail the
+    run — a gate crying wolf at exactly the moment it is meant to be run,
+    right before a commit."""
+    _repo_with(tmp_path, {"LICENSE": "Copyright (c) 2026 Fakename Surname\n"},
+               commit=["LICENSE"], allowlist="LICENSE\n")
+    _git(tmp_path, "add", ".privacy-allowlist")
+    _git(tmp_path, "commit", "-q", "-m", "add allowlist")
+
+    (tmp_path / "LICENSE").write_text("Copyright (c) 2026 Fakename Surname. All rights reserved.\n")
+    _git(tmp_path, "add", "LICENSE")
+
+    rc, out = _run(tmp_path, monkeypatch, capsys)
+    assert rc == 0, "a staged edit to an allowlisted file must not fail the run"
+    assert "allowlisted" in out
+
+
+def test_a_staged_new_file_that_is_not_allowlisted_still_fails(tmp_path, monkeypatch, capsys):
+    """The index naming a blob must not become a way to launder one: a
+    staged file nobody allowlisted still fails, as a tracked file would."""
+    _repo_with(tmp_path, {"app.py": "print(1)\n"}, commit=["app.py"])
+    (tmp_path / "leak.txt").write_text("fake.person@example.com\n")
+    _git(tmp_path, "add", "leak.txt")
+
+    rc, out = _run(tmp_path, monkeypatch, capsys)
+    assert rc == 1
+    assert "leak.txt" in out

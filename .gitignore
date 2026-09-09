@@ -52,3 +52,10 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# The launcher's compiled binary — a build artifact, not source. Unsigned and
+# unnotarised, so a downloaded copy is blocked by Gatekeeper on anyone else's
+# Mac anyway, and nobody could verify it matches launcher-src/ if it weren't.
+# The bundle skeleton (Info.plist, icon) stays tracked; run
+# launcher-src/build.sh to produce the binary.
+Application Cockpit.app/Contents/MacOS/

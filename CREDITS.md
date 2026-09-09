@@ -69,7 +69,7 @@ by permission, not by grant. Anyone forking this repo inherits the author's
 license, not Greg's permission, and should treat those ~193 lines accordingly.
 
 ### career-ops — numeric normalization
-**Where:** `Job search tool/numeric_fact_gate.py`
+**Where:** `numeric_fact_gate.py`
 **Source:** [santifer/career-ops](https://github.com/santifer/career-ops), `verify-cv-facts.mjs`
 **License:** MIT (Copyright (c) 2026 Santiago Fernández de Valderrama)
 **What was ported:** the thousands-grouping comma-stripping regex approach
