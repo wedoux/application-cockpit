@@ -47,6 +47,9 @@ def _require_pdftotext():
         raise PdftotextNotFound()
 
 
+PDFTOTEXT_TIMEOUT_S = 30
+
+
 def extract_text(pdf_path, page=None):
     """Full-document (or single-page) text via `pdftotext -layout` — the
     same view of the PDF an ATS text-parser gets, not what the eye sees."""
@@ -55,14 +58,17 @@ def extract_text(pdf_path, page=None):
     if page is not None:
         cmd += ["-f", str(page), "-l", str(page)]
     cmd += [str(pdf_path), "-"]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, check=True, timeout=PDFTOTEXT_TIMEOUT_S
+    )
     return result.stdout
 
 
 def page_count(pdf_path):
     _require_pdftotext()  # pdfinfo ships alongside pdftotext in poppler
     result = subprocess.run(
-        ["pdfinfo", str(pdf_path)], capture_output=True, text=True, check=True
+        ["pdfinfo", str(pdf_path)], capture_output=True, text=True, check=True,
+        timeout=PDFTOTEXT_TIMEOUT_S,
     )
     m = re.search(r"^Pages:\s+(\d+)", result.stdout, re.MULTILINE)
     return int(m.group(1)) if m else None

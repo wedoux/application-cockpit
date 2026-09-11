@@ -14,6 +14,7 @@ Usage:
 import hashlib
 import json
 import re
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -782,6 +783,11 @@ def api_document_download(doc_id):
     except ats_verify.PdftotextNotFound as e:
         conn.close()
         return jsonify({"ok": False, "error": "ats_gate_unavailable", "message": str(e)}), 500
+    except subprocess.TimeoutExpired:
+        out_path.unlink(missing_ok=True)
+        conn.close()
+        return jsonify({"ok": False, "error": "ats_gate_timeout",
+                         "message": "ATS text-layer check timed out."}), 500
 
     # posting_keywords' "stuffed" signal is deliberately NOT part of the hard
     # gate below — live-tested against real generated CVs and found to fire
