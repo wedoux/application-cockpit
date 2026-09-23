@@ -280,7 +280,7 @@ def test_language_gate_decline_closes_the_loop():
     decision_reason='language', decision_note quoting the requirement.
     (decline_role()'s own repost-linking behavior is covered directly in
     test_language_gate.py — this test is about the route, not the gate.)"""
-    role_id = _insert_role(company="DEPT", title="Head of UX",
+    role_id = _insert_role(company="Massive Dynamic", title="Head of UX",
                             jd_text="Full professional proficiency in both German and English "
                                      "(C1 level) is mandatory.")
     client = app.app.test_client()

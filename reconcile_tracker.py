@@ -59,28 +59,69 @@ PIPELINE_CLOSED_DEFAULT = "expired"
 # ---- Human decisions from the Phase 0.5 preview sign-off ----
 # Keyed by (normalized company, normalized title). These make the one-off
 # reconciliation reproducible and auditable instead of hand-editing the DB.
+#
+# These live in config.yaml, not here, because they are real outcome data:
+# which company, which title, and what you decided about it, sometimes with
+# a date attached. That is the same class of thing as your CV and your
+# profile, and it follows the same rule the rest of this repo follows —
+# real values in the gitignored config, a template in config.yaml.example.
+# Hardcoding them in tracked source published a real rejection, with its
+# date, to anyone who read the file.
+#
+# Shape in config.yaml, all optional:
+#
+#   reconcile:
+#     status_override:
+#       - {company: Some Company, title: Head of Design, status: ignored}
+#     force_merge:
+#       - {company: Some Company, title: Sr Designer Req 12345,
+#          merge_into_title: Senior Designer}
+#     conflict_live_note:
+#       - {company: Some Company, title: Senior Product Designer,
+#          note: "Repost of a role closed earlier."}
+#     import_conflicts_as_new: true
 
-# Per-row status overrides (Danske was declined on geography, not lapsed).
-STATUS_OVERRIDE = {
-    ("danske bank", "head of human centered design center of excellence"): "ignored",
-}
-# Possible-match rows to force-merge into an existing role (same role, different
-# title text). Value = normalized title of the existing role to merge into.
-FORCE_MERGE = {
-    ("logitech", "sr ux designer logitech g req 145142"): "sr user experience designer",
-}
-# Conflicts: import the tracker (historical) row as its own row, and stamp a
-# note on the live DB role so the signal shows there too.
-IMPORT_CONFLICTS_AS_NEW = True
-CONFLICT_LIVE_NOTE = {
-    ("nexthink", "senior product designer"): "Repost of role rejected 08.05.",
-}
+IMPORT_CONFLICTS_AS_NEW_DEFAULT = True
+
+
+def _load_reconcile_config():
+    """Read the human-decision tables from config.yaml. Missing file, missing
+    section or missing key all mean "no overrides", which is the correct
+    default for anyone who isn't replaying this author's one-off Phase 0.5
+    reconciliation. Company and title are normalized here, the same way the
+    lookup keys are, so the config can be written in readable prose."""
+    empty = ({}, {}, {}, IMPORT_CONFLICTS_AS_NEW_DEFAULT)
+    try:
+        import prompt_assembly as pa
+        cfg = pa.load_config() or {}
+    except Exception:
+        return empty
+    rc = cfg.get("reconcile") or {}
+
+    def keyed(entries, value_field):
+        out = {}
+        for e in entries or []:
+            company, title = e.get("company"), e.get("title")
+            value = e.get(value_field)
+            if company and title and value is not None:
+                out[(norm(company), norm(title))] = value
+        return out
+
+    return (
+        keyed(rc.get("status_override"), "status"),
+        keyed(rc.get("force_merge"), "merge_into_title"),
+        keyed(rc.get("conflict_live_note"), "note"),
+        bool(rc.get("import_conflicts_as_new", IMPORT_CONFLICTS_AS_NEW_DEFAULT)),
+    )
 
 
 def norm(s):
     s = (s or "").lower()
     s = re.sub(r"[^a-z0-9 ]+", " ", s)
     return re.sub(r"\s+", " ", s).strip()
+
+
+STATUS_OVERRIDE, FORCE_MERGE, CONFLICT_LIVE_NOTE, IMPORT_CONFLICTS_AS_NEW = _load_reconcile_config()
 
 
 def clean(v):

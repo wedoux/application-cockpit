@@ -81,9 +81,9 @@ def _insert_role(company, title, status="submitted", notes=None):
 
 
 CREATE_ROWS = [
-    {"company": "Xapo Bank", "title": "Head of Design", "url": "https://x/1",
+    {"company": "Hooli Bank", "title": "Head of Design", "url": "https://x/1",
      "suggested_category": "Leadership"},
-    {"company": "Deel", "title": "Lead Product Designer", "url": "https://x/2"},
+    {"company": "Soylent", "title": "Lead Product Designer", "url": "https://x/2"},
 ]
 UPDATE_ROWS = [
     {"company": "Acme Corp", "title": "Head of Design", "status": "rejected", "note": "rejected 12.08"},
@@ -181,15 +181,15 @@ def test_preview_leaves_the_file_where_it_is(isolated_staging_dir):
 
 
 def test_preview_reports_blocked_duplicates_rather_than_skipping_them(isolated_staging_dir):
-    role_id = _insert_role("Xapo Bank", "Head of Design", status="submitted")
+    role_id = _insert_role("Hooli Bank", "Head of Design", status="submitted")
     path = _stage(isolated_staging_dir, "creates.json", CREATE_ROWS)
 
     pv = staging.preview(path)
-    assert [c["company"] for c in pv["to_create"]] == ["Deel"]
+    assert [c["company"] for c in pv["to_create"]] == ["Soylent"]
     assert len(pv["blocked"]) == 1
     blocked = pv["blocked"][0]
-    assert blocked["company"] == "Xapo Bank"
-    assert blocked["existing"] == {"id": role_id, "company": "Xapo Bank",
+    assert blocked["company"] == "Hooli Bank"
+    assert blocked["existing"] == {"id": role_id, "company": "Hooli Bank",
                                    "title": "Head of Design", "status": "submitted"}
 
 
@@ -204,12 +204,12 @@ def test_preview_reports_invalid_rows(isolated_staging_dir):
 
 
 def test_preview_indexes_rows_by_position_in_the_source_file(isolated_staging_dir):
-    _insert_role("Deel", "Lead Product Designer")
+    _insert_role("Soylent", "Lead Product Designer")
     rows = [
-        {"company": "Xapo Bank", "title": "Head of Design", "url": "https://x/1"},
-        {"company": "Deel", "title": "Lead Product Designer", "url": "https://x/2"},   # blocked
+        {"company": "Hooli Bank", "title": "Head of Design", "url": "https://x/1"},
+        {"company": "Soylent", "title": "Lead Product Designer", "url": "https://x/2"},   # blocked
         {"company": "", "title": "T", "url": "https://x/3"},                            # invalid
-        {"company": "Synthesia", "title": "Product Designer", "url": "https://x/4"},
+        {"company": "Vehement", "title": "Product Designer", "url": "https://x/4"},
     ]
     pv = staging.preview(_stage(isolated_staging_dir, "creates.json", rows))
     assert [c["index"] for c in pv["to_create"]] == [0, 3]
@@ -304,7 +304,7 @@ def test_ingest_creates_only_the_selected_rows(isolated_staging_dir):
     conn = dbmod.connect()
     got = [r["company"] for r in conn.execute("SELECT company FROM roles")]
     conn.close()
-    assert got == ["Deel"]
+    assert got == ["Soylent"]
 
 
 def test_ingest_with_no_selection_applies_everything(isolated_staging_dir):
@@ -321,16 +321,16 @@ def test_selection_survives_a_row_being_blocked_after_the_preview(isolated_stagi
     selection keyed to plan position would create the wrong row. Keyed to
     the source file, the still-selected row is still the right one."""
     rows = [
-        {"company": "Xapo Bank", "title": "Head of Design", "url": "https://x/1"},
-        {"company": "Deel", "title": "Lead Product Designer", "url": "https://x/2"},
-        {"company": "Synthesia", "title": "Product Designer", "url": "https://x/3"},
+        {"company": "Hooli Bank", "title": "Head of Design", "url": "https://x/1"},
+        {"company": "Soylent", "title": "Lead Product Designer", "url": "https://x/2"},
+        {"company": "Vehement", "title": "Product Designer", "url": "https://x/3"},
     ]
     path = _stage(isolated_staging_dir, "creates.json", rows)
     pv = staging.preview(path)
     assert [c["index"] for c in pv["to_create"]] == [0, 1, 2]
 
     # ...the cron lands Xapo between the two requests, shifting the plan.
-    _insert_role("Xapo Bank", "Head of Design")
+    _insert_role("Hooli Bank", "Head of Design")
 
     result = staging.ingest(path, selection=[0, 2])
     assert result["created"] == 1
@@ -338,11 +338,11 @@ def test_selection_survives_a_row_being_blocked_after_the_preview(isolated_stagi
     conn = dbmod.connect()
     got = sorted(r["company"] for r in conn.execute("SELECT company FROM roles WHERE source = 'sweep'"))
     conn.close()
-    assert got == ["Synthesia"], "the row selected by file index, not the one at that plan position"
+    assert got == ["Vehement"], "the row selected by file index, not the one at that plan position"
 
 
 def test_ingest_blocks_duplicates_and_says_so(isolated_staging_dir):
-    _insert_role("Xapo Bank", "Head of Design")
+    _insert_role("Hooli Bank", "Head of Design")
     result = staging.ingest(_stage(isolated_staging_dir, "creates.json", CREATE_ROWS))
     assert result["created"] == 1
     assert result["blocked"] == 1
@@ -416,7 +416,7 @@ def test_the_full_route_round_trip(client, isolated_staging_dir):
     path = _stage(isolated_staging_dir, "creates.json", CREATE_ROWS)
     listing = client.get("/api/staged").get_json()
     entry = listing["files"][0]
-    assert [c["company"] for c in entry["preview"]["to_create"]] == ["Xapo Bank", "Deel"]
+    assert [c["company"] for c in entry["preview"]["to_create"]] == ["Hooli Bank", "Soylent"]
 
     r = client.post("/api/staged/apply", json={"path": entry["path"], "selection": [0]})
     assert r.status_code == 200
@@ -424,7 +424,7 @@ def test_the_full_route_round_trip(client, isolated_staging_dir):
 
     assert client.get("/api/staged").get_json()["pending"] == 0
     roles = client.get("/api/roles").get_json()["roles"]
-    assert [r["company"] for r in roles] == ["Xapo Bank"]
+    assert [r["company"] for r in roles] == ["Hooli Bank"]
 
 # ------------------------------------------------------------------
 # Where the staging directory comes from

@@ -49,10 +49,10 @@ cookie policy for more details on how your data is processed and stored.
 </body></html>
 """
 
-# Real pasted JD, role 27 (InvestEngine) in cockpit.db, jd_source='paste'.
+# Real pasted JD, role 27 (Umbrella Invest) in cockpit.db, jd_source='paste'.
 REAL_JD_HTML = "<html><head><title>Head of Product Design</title></head><body><article>" + "".join(
-    f"<p>{line}</p>" for line in """About InvestEngine
-InvestEngine is a fast-growing UK fintech building a commission-free ETF investment platform for retail and B2B partners. We are looking for a Head of Product Design to own design as a strategic function, not an execution service.
+    f"<p>{line}</p>" for line in """About Umbrella Invest
+Umbrella Invest is a fast-growing UK fintech building a commission-free ETF investment platform for retail and B2B partners. We are looking for a Head of Product Design to own design as a strategic function, not an execution service.
 
 The role
 - Lead and grow the product design function; set the design vision and operating model.
@@ -127,27 +127,27 @@ def test_workday_provider_extracts_job_description_from_cxs_json(monkeypatch):
         return _FakeWorkdayResponse(200, {
             "jobPostingInfo": {
                 "title": "Senior Hardware Product User Experience Designer",
-                "jobDescription": "<p>" + ("Logitech is the Sweet Spot. " * 60) + "</p>",
+                "jobDescription": "<p>" + ("Initech is the Sweet Spot. " * 60) + "</p>",
             }
         })
 
     monkeypatch.setattr(jd_fetch.requests, "get", fake_get)
-    url = ("https://logitech.wd5.myworkdayjobs.com/en-US/Logitech/job/job/"
+    url = ("https://initech.wd5.myworkdayjobs.com/en-US/Initech/job/job/"
            "Lausanne-Switzerland/Senior-Hardware-Product-User-Experience-Designer_146581")
     result = jd_fetch._workday_provider(url)
     assert result is not None
     text, title = result
     assert title == "Senior Hardware Product User Experience Designer"
-    assert "Logitech is the Sweet Spot" in text
+    assert "Initech is the Sweet Spot" in text
     assert calls == [
-        "https://logitech.wd5.myworkdayjobs.com/wday/cxs/logitech/Logitech/job/"
+        "https://initech.wd5.myworkdayjobs.com/wday/cxs/initech/Initech/job/"
         "Lausanne-Switzerland/Senior-Hardware-Product-User-Experience-Designer_146581"
     ]
 
 
 def test_workday_provider_returns_none_on_404(monkeypatch):
     monkeypatch.setattr(jd_fetch.requests, "get", lambda url, headers=None, timeout=None: _FakeWorkdayResponse(404))
-    url = "https://logitech.wd5.myworkdayjobs.com/en-US/Logitech/job/job/gone/Old-Posting_999"
+    url = "https://initech.wd5.myworkdayjobs.com/en-US/Initech/job/job/gone/Old-Posting_999"
     assert jd_fetch._workday_provider(url) is None
 
 
@@ -155,13 +155,13 @@ def test_fetch_jd_falls_through_to_paste_when_workday_lookup_fails(monkeypatch):
     """A dead Workday requisition (delisted from CXS, e.g. id=2 / req 145142
     in the live corpus) must degrade to the paste box, not raise."""
     monkeypatch.setattr(jd_fetch.requests, "get", lambda url, headers=None, timeout=None: _FakeWorkdayResponse(404))
-    url = "https://logitech.wd5.myworkdayjobs.com/en-US/Logitech/job/job/Lausanne-Switzerland/Sr-User-Experience-Designer_145142"
+    url = "https://initech.wd5.myworkdayjobs.com/en-US/Initech/job/job/Lausanne-Switzerland/Sr-User-Experience-Designer_145142"
     text, title, source = jd_fetch.fetch_jd(url)
     assert source == "none"
     assert text == ""
 
 
-# Title-relevance check, promoted into the accept gate. Danske Bank (real
+# Title-relevance check, promoted into the accept gate. Northwind Bank (real
 # role id 29 in cockpit.db) cleared the 800-char threshold on pure legal/
 # website boilerplate — zero of its title's significant words present. This
 # is the real text that was fetched for it, used as a regression fixture.
@@ -175,13 +175,13 @@ DANSKE_BANK_BOILERPLATE = (
     "Markets in Financial Instruments Directive. In no event should it be considered as a "
     "solicitation of business or a public offer. As such the information and documents shall "
     "not serve as a basis for any kind of obligation, contractual or otherwise.\n"
-    "The information is based on sources that are deemed to be viable. Danske Bank endeavours "
+    "The information is based on sources that are deemed to be viable. Northwind Bank endeavours "
     "to ensure that the information is accurate and up-to-date, and reserves the right to make "
-    "corrections to the content at any time, without prior notice. However, Danske Bank cannot "
+    "corrections to the content at any time, without prior notice. However, Northwind Bank cannot "
     "guarantee that such information is complete or that it has not been modified by an outside "
     "party, by means of a virus or system intrusion, for example. No information on this website "
     "may be construed as such a guarantee.\n"
-    "Liability waiver: Danske Bank or any contributor to this website shall not be liable for "
+    "Liability waiver: Northwind Bank or any contributor to this website shall not be liable for "
     "any specific or consequential loss or damages that result from the access to or use of, "
     "or the inability to access or use, the materials on this website.\n"
     "You are aware that the use and interpretation of this information requires specific and "
@@ -197,7 +197,7 @@ DANSKE_BANK_BOILERPLATE = (
     "None of the information relating to financial instruments presented on this website, nor "
     "a copy of it, may be provided, distributed or transmitted in any way to third parties, in "
     "particular in the US, Canada or other jurisdictions in which such offers or sales "
-    "promotions are not allowed, without the prior written permission of Danske Bank."
+    "promotions are not allowed, without the prior written permission of Northwind Bank."
 )
 assert len(DANSKE_BANK_BOILERPLATE) >= jd_fetch.SUBSTANTIAL  # clears the char threshold alone
 

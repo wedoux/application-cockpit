@@ -94,12 +94,12 @@ scanner:
     - company: Figma
       handler: greenhouse
       target: https://boards-api.greenhouse.io/v1/boards/figma/jobs
-    - company: Sonar
+    - company: Lever
       handler: lever
-      target: https://api.lever.co/v0/postings/sonarsource
-    - company: Linear
+      target: https://api.lever.co/v0/postings/lever
+    - company: Ashby
       handler: ashby
-      target: linear
+      target: ashbyhq
 
   # Broad design/UX title patterns — deliberately generic, not tuned to
   # any one search track. Widen or narrow these to match your own targets.
@@ -126,3 +126,29 @@ scanner:
   manual_check:
     - "Example Bank — https://careers.examplebank.com (SuccessFactors)"
     - "Example Pharma — https://jobs.examplepharma.com (Taleo)"
+
+# Human decisions from a one-off tracker reconciliation, read by
+# reconcile_tracker.py. Entirely optional: omit this block and the
+# reconciliation runs with no overrides, which is the right default unless
+# you are replaying a specific historical import of your own.
+#
+# These are real outcome data when you fill them in (which role, what you
+# decided about it, sometimes with a date), so they belong here in
+# config.yaml, which git ignores, and never in tracked source. The entries
+# below are invented.
+reconcile:
+  # Force a status on a matched row, where the tracker's own state is wrong
+  # or ambiguous (declined on geography, say, rather than quietly lapsed).
+  status_override:
+    - {company: Example Bank, title: Head of Design, status: ignored}
+  # Merge a possible-match row into an existing role that is the same job
+  # under a differently-worded title. Value is the existing role's title.
+  force_merge:
+    - {company: Example Corp, title: Sr Designer Req 00000, merge_into_title: Senior Designer}
+  # Stamp a note on the live role when a historical row conflicts with it,
+  # so the signal shows on both rows rather than only the imported one.
+  conflict_live_note:
+    - {company: Example Corp, title: Senior Product Designer, note: "Repost of a role closed earlier."}
+  # Import a conflicting tracker row as its own historical row (true), or
+  # keep only the live row (false).
+  import_conflicts_as_new: true

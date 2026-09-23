@@ -23,14 +23,14 @@ def _insert(company, title, url=None, job_id=None, portal=None, status="sourced"
 
 def _make_pair(scanner_notes=None):
     tracker_id = _insert(
-        "Logitech", "Sr. UX Designer, Logitech G (req 145142)",
-        job_id="trk-logitech-sr-ux-145142", status="submitted",
+        "Initech", "Sr. UX Designer, Initech G (req 145142)",
+        job_id="trk-initech-sr-ux-145142", status="submitted",
         applied_date="2026-06-01", notes="Applied via referral.",
         first_seen="2026-06-01",
     )
     scanner_id = _insert(
-        "Logitech", "Sr. User Experience Designer",
-        url="https://logitech.wd5.myworkdayjobs.com/en-US/Logitech/job/Lausanne-Switzerland/Sr-User-Experience-Designer_145142",
+        "Initech", "Sr. User Experience Designer",
+        url="https://initech.wd5.myworkdayjobs.com/en-US/Initech/job/Lausanne-Switzerland/Sr-User-Experience-Designer_145142",
         job_id="Sr-User-Experience-Designer_145142", portal="workday", source="auto",
         notes=scanner_notes, first_seen="2026-02-10",
     )
@@ -39,7 +39,7 @@ def _make_pair(scanner_notes=None):
 
 def test_title_req_id_extraction():
     assert mdr._title_req_id("Senior Hardware Product UX Designer (146581)") == "146581"
-    assert mdr._title_req_id("Sr. UX Designer, Logitech G (req 145142)") == "145142"
+    assert mdr._title_req_id("Sr. UX Designer, Initech G (req 145142)") == "145142"
     assert mdr._title_req_id("Head of Design") is None
     assert mdr._title_req_id("Lead UI/UX Designer") is None
 
@@ -47,7 +47,7 @@ def test_title_req_id_extraction():
 def test_url_req_id_extraction():
     assert mdr._url_req_id("Sr-User-Experience-Designer_145142") == "145142"
     assert mdr._url_req_id(
-        "https://logitech.wd5.myworkdayjobs.com/.../Sr-User-Experience-Designer_145142"
+        "https://initech.wd5.myworkdayjobs.com/.../Sr-User-Experience-Designer_145142"
     ) == "145142"
     assert mdr._url_req_id("User-Experience-Designer_202607-118105-1") == "202607"
     assert mdr._url_req_id("no-numbers-here") is None
@@ -56,8 +56,8 @@ def test_url_req_id_extraction():
 def test_find_candidate_pairs_matches_same_company_and_req_id():
     tracker_id, scanner_id = _make_pair()
     # A distractor: different company, same req-id shape — must not match.
-    _insert("Roche", "Lead UI/UX Designer",
-            url="https://roche.wd3.myworkdayjobs.com/en-US/roche-ext/job/Basel/User-Experience-Designer_202607-118105-1",
+    _insert("Acme Pharma", "Lead UI/UX Designer",
+            url="https://acme-pharma.wd3.myworkdayjobs.com/en-US/acme-pharma-ext/job/Basel/User-Experience-Designer_202607-118105-1",
             job_id="User-Experience-Designer_202607-118105-1", portal="workday", source="auto")
 
     conn = dbmod.connect()
@@ -90,7 +90,7 @@ def test_apply_merge_folds_fields_and_never_deletes():
     scanner_row = conn.execute("SELECT * FROM roles WHERE id = ?", (scanner_id,)).fetchone()
 
     # Tracker row absorbs url/job_id/portal, keeps its own curated fields.
-    assert tracker_row["url"] == "https://logitech.wd5.myworkdayjobs.com/en-US/Logitech/job/Lausanne-Switzerland/Sr-User-Experience-Designer_145142"
+    assert tracker_row["url"] == "https://initech.wd5.myworkdayjobs.com/en-US/Initech/job/Lausanne-Switzerland/Sr-User-Experience-Designer_145142"
     assert tracker_row["job_id"] == "Sr-User-Experience-Designer_145142"
     assert tracker_row["portal"] == "workday"
     assert tracker_row["status"] == "submitted"

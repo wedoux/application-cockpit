@@ -109,6 +109,7 @@ Usage:
     # --allowlist defaults to <target_dir>/.privacy-allowlist (absent is fine)
 """
 
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -150,6 +151,64 @@ def load_tokens(tokens_file):
             "— fill in your actual personal identifiers, one per line."
         )
     return tokens
+
+
+# Employer names are personal data too, and they are the class this check
+# missed for its whole life. .privacy-tokens holds identifiers that are
+# stable (your name, your email, your past employers), so a static list
+# works for those. The companies you are APPLYING to are not stable: the
+# list grows every time you apply somewhere, and a static list goes stale
+# the same day. So they are derived from cockpit.db instead, which is
+# gitignored, local, and already holds every company in the pipeline. The
+# check maintains itself.
+#
+# Short names are skipped: a two- or three-character company name produces
+# false positives against ordinary code, and plenty of real company names
+# are also ordinary English words, which produce them too. That is why a
+# hit here is reported for a human to judge rather than assumed a leak. The
+# minimum length is a blunt instrument, deliberately: over-reporting a real
+# name is recoverable, missing one is not.
+MIN_EMPLOYER_NAME_LEN = 5
+
+# Company names that are also ordinary English words, excluded from
+# AUTOMATIC derivation only. "Canonical" is a real company and also the
+# word this codebase uses for "the canonical form of a language name", so
+# deriving it from the database flags prose that has nothing to do with any
+# employer. A check that cries wolf on its own comments is a check that
+# gets ignored, which is the failure this whole project is about.
+#
+# This is a deliberate blind spot, not a free pass: a name listed here is
+# skipped by derivation but still caught if you put it in .privacy-tokens
+# explicitly, which is a conscious act rather than a silent default. Add a
+# name here only when the ordinary-word sense genuinely occurs in this
+# repo's own text, not merely because the word exists.
+DERIVED_NAME_EXCLUSIONS = {"Canonical"}
+
+
+def load_employer_names(target_dir, db_name="cockpit.db"):
+    """Every distinct company in the local pipeline database, as tokens.
+    Returns [] when the database is absent (a fresh clone, or CI), which is
+    correct: there is nothing local to leak, and .privacy-tokens still
+    covers the stable identifiers. Never raises on a malformed or
+    unreadable database, since a privacy check that dies on a bad file is
+    a privacy check that stops running."""
+    db_path = Path(target_dir) / db_name
+    if not db_path.exists():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            rows = conn.execute("SELECT DISTINCT company FROM roles").fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return []
+    names = set()
+    for (company,) in rows:
+        name = (company or "").strip()
+        if len(name) >= MIN_EMPLOYER_NAME_LEN and name not in DERIVED_NAME_EXCLUSIONS:
+            names.add(name)
+    return sorted(names)
 
 
 def _token_hits(data: bytes, tokens):
@@ -337,6 +396,41 @@ def load_allowlist(allowlist_file):
     return entries
 
 
+def load_history_baseline(baseline_file):
+    """Blobs already published in a pushed commit, accepted as-is.
+
+    Keyed by exact blob SHA, never by path or by name. That is the whole
+    point: a baselined SHA pins one specific piece of content that is
+    already public and cannot be recalled. Any NEW leak produces a new blob
+    with a different SHA and fails the run, so baselining the past does not
+    blind the check to the future.
+
+    This exists because a check that exits non-zero forever teaches you to
+    ignore it, and an ignored check is worse than no check. Rewriting pushed
+    history would not even fix the underlying exposure: the objects stay
+    addressable by SHA on the forge until it decides to collect them, so the
+    remediation would be incomplete as well as expensive.
+
+    Format: one entry per line, `<sha>  <path>  <reason>`. Committed, like
+    the allowlist, because an exception nobody can see is one nobody can
+    review."""
+    path = Path(baseline_file)
+    if not path.exists():
+        return {}
+    entries = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(None, 2)
+        if len(parts) < 2 or len(parts[0]) != 40:
+            continue
+        sha, blob_path = parts[0], parts[1]
+        entries[sha] = {"path": blob_path,
+                        "reason": parts[2] if len(parts) > 2 else "(no reason given)"}
+    return entries
+
+
 def _git_bytes(repo_dir, *args, allowed_returncodes=(0,)):
     proc = subprocess.run(["git", "-C", str(repo_dir), *args], capture_output=True)
     if proc.returncode not in allowed_returncodes:
@@ -410,7 +504,7 @@ def index_blob_paths(repo_dir):
     return mapping
 
 
-def classify(repo_dir, tree_findings, history_findings, allowlist=()):
+def classify(repo_dir, tree_findings, history_findings, allowlist=(), baseline=None):
     """Annotate raw findings with publishability. Returns (tree, history),
     lists of dicts — nothing is dropped, only labelled."""
     allowlist = set(allowlist)
@@ -449,7 +543,12 @@ def classify(repo_dir, tree_findings, history_findings, allowlist=()):
         # secrets.txt is not excused by the LICENSE entry.
         allowlisted = (objtype == BLOB and bool(paths)
                        and all(p in allowlist for p in paths))
-        history.append({**finding, "paths": paths, "allowlisted": allowlisted})
+        # Baselining is by SHA and blobs only, for the same reason
+        # allowlisting is: a commit message has no content-address to pin,
+        # so there would be nothing specific to accept.
+        baselined = objtype == BLOB and finding["sha"] in (baseline or {})
+        history.append({**finding, "paths": paths, "allowlisted": allowlisted,
+                        "baselined": baselined})
     return tree, history
 
 
@@ -458,7 +557,8 @@ def failing(tree, history):
     acknowledged."""
     bad_tree = [f for f in tree
                 if f["class"] in FAILING_CLASSES and not f["allowlisted"]]
-    bad_history = [f for f in history if not f["allowlisted"]]
+    bad_history = [f for f in history
+                   if not f["allowlisted"] and not f.get("baselined")]
     return bad_tree, bad_history
 
 
@@ -482,16 +582,26 @@ def main():
     # A flag's value is not the target: "--tokens FILE" used to leave FILE
     # sitting in the positional list, so calling this with no target_dir but
     # an explicit --tokens scanned the token file's own directory.
-    flagged = {"--tokens", "--allowlist"}
+    flagged = {"--tokens", "--allowlist", "--baseline"}
     args = [a for i, a in enumerate(sys.argv[1:], start=1)
             if not a.startswith("--") and sys.argv[i - 1] not in flagged]
     target = args[0] if args else str(Path(__file__).parent)
 
     tokens_file = _flag_value("--tokens") or str(Path(target) / ".privacy-tokens")
     allowlist_file = _flag_value("--allowlist") or str(Path(target) / ".privacy-allowlist")
+    baseline_file = _flag_value("--baseline") or str(Path(target) / ".privacy-history-baseline")
 
     tokens = load_tokens(tokens_file)
+    employers = load_employer_names(target)
+    if employers:
+        print(f"[employer names] {len(employers)} derived from cockpit.db "
+              "(gitignored, so the list never goes stale)\n")
+        tokens = tokens + employers
+    else:
+        print("[employer names] no cockpit.db found — checking .privacy-tokens only. "
+              "Add employer names there if you need them covered on this machine.\n")
     allowlist = load_allowlist(allowlist_file)
+    baseline = load_history_baseline(baseline_file)
 
     try:
         tree_findings, history_findings = check(target, tokens, skip_paths=(tokens_file,))
@@ -507,8 +617,8 @@ def main():
         print(f"check_privacy: clean — no tokens found in {target} (tree + history)")
         return 0
 
-    tree, history = classify(target, tree_findings, history_findings, allowlist)
-    _print_report(tree, history)
+    tree, history = classify(target, tree_findings, history_findings, allowlist, baseline)
+    _print_report(tree, history, baseline)
 
     bad_tree, bad_history = failing(tree, history)
     if bad_tree or bad_history:
@@ -518,8 +628,9 @@ def main():
 
     ignored = sum(1 for f in tree if f["class"] == IGNORED)
     allowed = sum(1 for f in tree if f["allowlisted"]) + sum(1 for f in history if f["allowlisted"])
+    based = sum(1 for f in history if f.get("baselined"))
     print(f"\ncheck_privacy: PASS — nothing publishable has a hit "
-          f"({ignored} gitignored, {allowed} allowlisted, all listed above)")
+          f"({ignored} gitignored, {allowed} allowlisted, {based} baselined, all listed above)")
     return 0
 
 
@@ -548,7 +659,7 @@ _TREE_GROUPS = [
 ]
 
 
-def _print_report(tree, history):
+def _print_report(tree, history, baseline=None):
     for klass, allowlisted, heading, verdict in _TREE_GROUPS:
         group = [f for f in tree if f["class"] == klass
                  and (allowlisted is None or f["allowlisted"] == allowlisted)]
@@ -566,8 +677,12 @@ def _print_report(tree, history):
         of_type = [f for f in history if f["type"] == objtype]
         what = OBJECT_TYPE_LABELS[objtype]
         for group, suffix, verdict in (
-            ([f for f in of_type if not f["allowlisted"]], "reachable in history", "FAIL"),
+            ([f for f in of_type
+              if not f["allowlisted"] and not f.get("baselined")],
+             "reachable in history", "FAIL"),
             ([f for f in of_type if f["allowlisted"]], "allowlisted, still shown", "ok"),
+            ([f for f in of_type if f.get("baselined") and not f["allowlisted"]],
+             "baselined as already-published, still shown", "ok"),
         ):
             if not group:
                 continue
@@ -578,7 +693,9 @@ def _print_report(tree, history):
                              else " (no path in reachable history)")
                 else:
                     where = f" ({f['label']})" if f["label"] else ""
-                print(f"  {f['sha']}{where}: {', '.join(f['hits'])}")
+                reason = (baseline or {}).get(f["sha"], {}).get("reason")
+                note = f"\n      reason: {reason}" if f.get("baselined") and reason else ""
+                print(f"  {f['sha']}{where}: {', '.join(f['hits'])}{note}")
             print()
 
 

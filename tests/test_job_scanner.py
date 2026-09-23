@@ -2,7 +2,7 @@ import job_scanner
 
 
 # TITLE_PATTERNS widened 2026-08-19 against real dropped_titles evidence
-# from scan observability (Logitech, Nexthink, DEPT) — three English
+# from scan observability (Initech, Globex, Massive Dynamic) — three English
 # word-order shapes, not a language gap. Locks in the exact tuning: an
 # earlier, looser version of the "design as a bare noun" shape also caught
 # hardware/chip design engineering roles and retail "Experience Manager"
@@ -104,12 +104,12 @@ def test_search_workday_does_not_double_the_job_segment(monkeypatch):
 
     monkeypatch.setattr(job_scanner.SESSION, "post", fake_post)
 
-    api_url = "https://logitech.wd5.myworkdayjobs.com/wday/cxs/logitech/Logitech/jobs"
-    results, _summary = job_scanner.search_workday("Logitech", api_url)
+    api_url = "https://initech.wd5.myworkdayjobs.com/wday/cxs/initech/Initech/jobs"
+    results, _summary = job_scanner.search_workday("Initech", api_url)
 
     assert len(results) == 1
     url = results[0]["url"]
-    assert url == ("https://logitech.wd5.myworkdayjobs.com/en-US/Logitech"
+    assert url == ("https://initech.wd5.myworkdayjobs.com/en-US/Initech"
                     "/job/Lausanne-Switzerland/Sr-User-Experience-Designer_145142")
     assert url.count("/job/") == 1
 

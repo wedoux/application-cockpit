@@ -23,3 +23,17 @@
 #   not as personal history
 # API key prefix (the fixed leading characters your provider always uses)
 # Your absolute home-directory path prefix
+
+# Employer names.
+#
+# Companies you have APPLIED to are derived automatically from cockpit.db at
+# check time, so they do not need listing here: that database is gitignored,
+# local, and already holds every company in your pipeline, which makes the
+# check self-maintaining instead of a list that goes stale the next time you
+# apply somewhere. Nothing to do for those.
+#
+# List here only employer names that are NOT in that database and that you
+# still want caught, which in practice means your own past employers, since
+# those appear in your CV rather than in your pipeline:
+# Some Past Employer Ltd
+# Another Former Employer

@@ -122,8 +122,8 @@ _TITLE_STOPWORDS = {
 
 def title_words_present(title, text):
     """Second signal alongside the char threshold (SUBSTANTIAL): does the
-    role's own title actually show up in the extracted text? Danske Bank
-    (a real case) cleared 800 chars on generic legal boilerplate with zero
+    role's own title actually show up in the extracted text? One real
+    posting cleared 800 chars on generic legal boilerplate with zero
     of its title's words present — a char count alone can't catch that
     class of false positive, only content relevance can.
 

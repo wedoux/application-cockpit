@@ -68,7 +68,7 @@ FLUENCY_WORD_RANK = {
 
 _CEFR_RE = re.compile(r"\b([ABC][12])\b", re.IGNORECASE)
 
-# Canonical target language -> surface forms across the 4 posting-writing
+# The canonical target language -> surface forms across the 4 posting-writing
 # languages (English, French, German, Italian). This is what lets a French-
 # or German-authored posting's own requirement sentence be read at all.
 #

@@ -1,0 +1,29 @@
+# Blobs already published in a pushed commit, accepted as-is.
+#
+# Keyed by exact blob SHA. That is deliberate: a baselined SHA pins one
+# specific piece of content that is already public and cannot be recalled.
+# Anything NEW produces a different SHA and fails the run, so baselining the
+# past does not blind this check to the future.
+#
+# Why baseline rather than rewrite history. These blobs hold company names in
+# test fixtures, one illustrative comment, and one note recording a decision,
+# all pushed and public. Rewriting pushed history would break every clone and
+# still would not remove them: the objects stay addressable by SHA on the
+# forge until it chooses to collect them, so the remediation is incomplete as
+# well as expensive. Against that, a check that exits non-zero forever teaches
+# you to ignore it, and an ignored check is worse than no check.
+#
+# Every one of these paths is clean from that commit onward. This file records
+# what was already out, not a standing permission to add more.
+#
+# Format: <sha>  <path>  <reason>
+
+5f9f886e4b2c885317c79a3938f1a697d37fb71b  tests/test_staging.py  Company names in test fixtures; public since the repo went public, invented names from "Get employer names and outcome data out of tracked source" onward.
+fca88defe74da7e6765cb29aa99de013a9428e1e  tests/test_staging.py  Earlier revision of the same fixtures, same reason.
+916d94dcf030cf8d49af229416b48ee695c91a1f  tests/test_job_scanner.py  Company names in test fixtures; cleaned in "Get employer names and outcome data out of tracked source".
+d5bb5b30fa22c9f8d4863c300fa1b7519277d9fa  tests/test_cockpit.py  Company names in test fixtures; cleaned in "Get employer names and outcome data out of tracked source".
+baf3fb03462b1675ea0b30f8510cb9f43b6cb85f  tests/test_merge_duplicate_roles.py  Company names in test fixtures; cleaned in "Get employer names and outcome data out of tracked source".
+b00e402c60a3f28ac3412d795fc78ba584d41a94  job_scanner.py  Two companies named as illustrative large-tenant examples in a comment; genericised in "Get employer names and outcome data out of tracked source".
+e01706913c247076ad34bc59e1af3c65fdc0f70e  jd_fetch.py  One posting named in a comment as a real worked example; genericised in "Get employer names and outcome data out of tracked source".
+2d3630416c47ea71e6ba10d2f267dc50d1e64967  config.yaml.example  Two starter ATS targets that also appear in the local pipeline; swapped for unrelated boards, so the starter list now has no overlap.
+4b17297d0bf1de719ae4f83d88152de92f743657  config.yaml.example  Earlier revision of the same starter list, same reason.

@@ -33,8 +33,8 @@ from urllib.robotparser import RobotFileParser
 # without shipping anyone's actual job search as the default.
 # ============================================================
 
-# Server-side keyword terms for Workday tenants. Big tenants (Roche, Novartis)
-# host thousands of postings — keyword search keeps each query under the
+# Server-side keyword terms for Workday tenants. Big tenants can host
+# thousands of postings — keyword search keeps each query under the
 # pagination cap. Results are merged and deduped, then title_patterns filters.
 # Generic enough (not personal targeting) to stay a code constant.
 WORKDAY_SEARCH_TERMS = ["design", "user experience"]
