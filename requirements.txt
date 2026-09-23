@@ -30,7 +30,7 @@ playwright==1.61.0
 pluggy==1.6.0
 pydantic==2.13.4
 pydantic_core==2.46.4
-pyee==13.0.1
+pyee==14.0.0
 Pygments==2.20.0
 pypdf==6.16.1
 pytest==9.1.1
