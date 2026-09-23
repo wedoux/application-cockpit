@@ -6,7 +6,7 @@ for maintainers. Issues and pull requests are welcome, but may sit for a while o
 for reasons that only make sense inside my own search. Fork it instead if that's easier — no
 permission needed, and a fork going its own way beats a PR that waits.
 
-## Five things that will bite you
+## Six things that will bite you
 
 Each of these is here because it already went wrong.
 
@@ -33,6 +33,15 @@ than reimplementing, so a role blocked in the ingest panel is blocked by the sam
 `app._find_duplicate` the manual-add button uses. Two rules would drift, and what counted as a
 duplicate would start depending on which door a role came through.
 
+**One `style_gate.py`, two callers, no second copy.** The live generation path
+(`app.py`'s `run_fidelity_gates`) and the eval harness (`cover_letter_experiment.py`)
+import the same module. A harness with its own copy of the patterns would drift from the
+gate it's supposed to be measuring, and the drift would look like a result. The
+negative-parallelism categories are also mutually exclusive by construction (`_COMMA_NOT_RE`
+excludes `not just` so `_COMMA_NOT_JUST_RE` owns those spans), which is what keeps one
+sentence from being counted under two headings. Widening one pattern without checking the
+others is how that breaks, and nothing will look wrong afterward.
+
 **Copy `.privacy-tokens.example` to `.privacy-tokens` and run `check_privacy.py` before
 pushing a fork.** It reads the working tree as raw bytes, so it sees inside a SQLite snapshot
 or a PDF that a text diff reports only as "binary files differ", and it reads git history the
@@ -43,8 +52,8 @@ reachable in history, or untracked and not ignored. Deliberate exceptions go in
 `.privacy-allowlist`, which drops them from the exit code and keeps printing them anyway. A
 leak found after a push can't be unpublished.
 
-355 tests, about a minute (`python -m pytest`). Three of them skip until you map a CV
-for all three categories and have a real `cockpit.db`, so a fresh clone prints 352 passed,
+492 tests, about a minute (`python -m pytest`). Three of them skip until you map a CV
+for all three categories and have a real `cockpit.db`, so a fresh clone prints 489 passed,
 3 skipped. Green before your change, green after.
 
 ## What I'll decline
