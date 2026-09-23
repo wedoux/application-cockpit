@@ -106,6 +106,11 @@ dependency bump. It had never executed. Not once, on any commit, because Actions
 disabled at the repository level. The file sat there looking like a gate while every push
 went in unchecked. Found by querying the Actions API instead of reading the YAML.
 
+It could not have passed either. The workflow never created a `config.yaml`, so 46 tests
+would have answered 500 on any run it ever made. The first fault hid the second for as long
+as it lasted, and turning Actions on is what exposed it: one broken control was concealing
+another inside the same file.
+
 **A check called a kept promise broken.** A later gate verifies that a generated letter
 actually delivers the figures its own plan committed to. It scored a batch and reported one
 commitment dropped in two runs out of five. Both letters had delivered it, spelled out as

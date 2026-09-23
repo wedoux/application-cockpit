@@ -24,5 +24,10 @@ jobs:
       - name: Audit dependencies for known vulnerabilities
         run: pip install pip-audit && pip-audit -r requirements.txt
 
+      # The same step the Quickstart gives a human. app.py can't load a config
+      # without it, and 46 tests answer 500 instead of what they assert.
+      - name: Create config from the shipped example
+        run: cp config.yaml.example config.yaml
+
       - name: Run tests
         run: pytest -q
