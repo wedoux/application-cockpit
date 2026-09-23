@@ -78,6 +78,57 @@ def test_generate_blocks_on_an_unsourced_number(monkeypatch):
     assert n == 0, "a blocked draft must never be stored"
 
 
+def test_generate_commits_earlier_doc_types_when_a_later_one_fails_its_gate(monkeypatch):
+    """Regression: api_generate used to call conn.commit() only once, after the
+    whole doc_types loop finished. A later doc type failing its own gate (or
+    the API call itself) returned early and closed the connection without
+    ever committing — which discarded an earlier doc type's document that had
+    already generated and cleared its own gates, in the same request. Each
+    document must now be durable the moment it's stored, independent of what
+    happens to doc types that come after it."""
+    role_id = _insert_role()
+
+    def _gen(role, doc_type, config=None):
+        content = ("I led a team of 7 designers on a $500k budget." if doc_type == "cv"
+                   else "I led a team of 27 designers on a $500k budget.")  # 27 is invented — blocks
+        return _fake_generate(content)(role, doc_type, config)
+
+    monkeypatch.setattr(generation, "generate", _gen)
+    client = app.app.test_client()
+    r = client.post(f"/api/roles/{role_id}/generate", json={"doc_types": ["cv", "cover_letter"]})
+    assert r.status_code == 422
+    assert r.get_json()["doc_type"] == "cover_letter"
+
+    conn = dbmod.connect()
+    rows = conn.execute("SELECT doc_type FROM documents WHERE role_id = ?", (role_id,)).fetchall()
+    conn.close()
+    assert {row["doc_type"] for row in rows} == {"cv"}, \
+        "the cv generated before the gate failure must still be stored"
+
+
+def test_generate_commits_earlier_doc_types_when_a_later_one_errors(monkeypatch):
+    """Same regression as above, via the generation-error path rather than the
+    numeric-gate path — both return early from inside the doc_types loop and
+    both used to lose everything before them."""
+    role_id = _insert_role()
+
+    def _gen(role, doc_type, config=None):
+        if doc_type == "cv":
+            return _fake_generate("I led a team of 7 designers on a $500k budget.")(role, doc_type, config)
+        raise generation.GenerationError("simulated API failure")
+
+    monkeypatch.setattr(generation, "generate", _gen)
+    client = app.app.test_client()
+    r = client.post(f"/api/roles/{role_id}/generate", json={"doc_types": ["cv", "cover_letter"]})
+    assert r.status_code == 502
+
+    conn = dbmod.connect()
+    rows = conn.execute("SELECT doc_type FROM documents WHERE role_id = ?", (role_id,)).fetchall()
+    conn.close()
+    assert {row["doc_type"] for row in rows} == {"cv"}, \
+        "the cv generated before the later error must still be stored"
+
+
 def test_generate_passes_when_every_number_is_sourced(monkeypatch):
     role_id = _insert_role()
     monkeypatch.setattr(

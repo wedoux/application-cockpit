@@ -505,6 +505,14 @@ def api_generate(role_id):
             (role_id, dt, version, "md", gen["content_md"], content_json,
              gen["model"], critic_notes, "draft", dbmod.now()),
         )
+        # Commit per document, not once at the end of the doc_types loop. A
+        # later doc type in the same request can still fail (generation error,
+        # numeric-gate block) and return early — that must not roll back a
+        # document that already generated and cleared its own gates. Before
+        # this, a cover-letter failure silently discarded a CV inserted
+        # moments earlier in the same request, because sqlite3 rolls back
+        # whatever wasn't committed when the connection closes.
+        conn.commit()
         u = gen["usage"]
         print(f"[generate] role {role_id} {dt} v{version} | "
               f"in={u['input_tokens']} out={u['output_tokens']} "
@@ -522,7 +530,6 @@ def api_generate(role_id):
             "language_gate_overridden": lang_gate_overridden,
         })
 
-    conn.commit()
     conn.close()
     return jsonify({"ok": True, "documents": results})
 
