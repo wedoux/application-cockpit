@@ -56,19 +56,35 @@ def resolve_master_cv(category, config):
 # System prompt: verbatim voice context + task-agnostic role framing
 # ------------------------------------------------------------------
 
-def build_role_frame(name, tagline_quote=None, preferred_name=None):
+def build_role_frame(name, tagline_quote=None, preferred_name=None, category=None,
+                      framing_map=None):
     """The task-agnostic role framing, parameterised by config['profile']:
     name is required (every profile has one); preferred_name defaults to
     name's first token but lets a nickname override it, for anyone who
-    doesn't go by their own legal first name day to day; tagline_quote is
-    optional — a personal positioning line isn't something every profile
-    has, so the rule it drives is only included when configured."""
+    doesn't go by their own legal first name day to day.
+
+    framing_map (config['profile']['framing']) is category-keyed positioning
+    guidance, e.g. Leadership gets scale/org framing and Senior IC gets
+    hands-on-craft framing, because how you lead a document should vary
+    with the kind of role, the same way category_cv_map already varies
+    which master CV gets used. When framing_map has an entry for `category`,
+    it wins. tagline_quote is the fallback: a flat, category-blind
+    positioning line, used when there's no framing_map entry for this
+    category (including profiles that haven't set one up at all) or no
+    category was given. Both are optional: a profile with neither gets no
+    lead line at all, not an error."""
     short = preferred_name or name.split()[0]
-    lead_line = (
-        f'- Lead with UX-as-strategy. {short}\'s line: "{tagline_quote}"\n'
-        "  Never position them as a decorator.\n"
-        if tagline_quote else ""
-    )
+    framing_map = framing_map or {}
+    category_framing = framing_map.get(category) if category else None
+    if category_framing:
+        lead_line = f"- Framing for this role: {category_framing}\n"
+    elif tagline_quote:
+        lead_line = (
+            f'- Lead with UX-as-strategy. {short}\'s line: "{tagline_quote}"\n'
+            "  Never position them as a decorator.\n"
+        )
+    else:
+        lead_line = ""
     return f"""\
 You are drafting a job application document for {name}.
 
@@ -91,11 +107,12 @@ Absolute rules:
 """
 
 
-def build_system_prompt(config, master_cv):
+def build_system_prompt(config, master_cv, category=None):
     """The stable, cacheable context: writing-rules.md verbatim + about-me.md
     verbatim + the category's master CV + the role frame. Everything here is
-    identical across both doc types (and across roles in the same category), so
-    it caches and both the CV and cover-letter calls reuse it."""
+    identical across both doc types for a given category (the role frame now
+    varies by category, same as the master CV already does), so it still
+    caches and both the CV and cover-letter calls for the same role reuse it."""
     writing_rules = _read(config["paths"]["writing_rules"])
     about_me = _read(config["paths"]["about_me"])
     logo_map = config.get("company_logo_map", {}) or {}
@@ -103,7 +120,8 @@ def build_system_prompt(config, master_cv):
     profile = config.get("profile", {})
     name = profile.get("name", "the candidate")
     short = profile.get("preferred_name") or name.split()[0]
-    role_frame = build_role_frame(name, profile.get("tagline_quote"), short)
+    role_frame = build_role_frame(name, profile.get("tagline_quote"), short,
+                                   category=category, framing_map=profile.get("framing"))
     return (
         "# Writing rules (binding — follow exactly)\n\n"
         f"{writing_rules}\n\n"
@@ -167,7 +185,7 @@ COVER_LETTER_TASK = """\
 TASK: Write a one-page cover letter as markdown prose (not JSON).
 - Direct first person, __PREFERRED_NAME__'s voice, no AI tells, no em-dashes.
 - Open with why THIS company and THIS role — not "I am writing to apply".
-- Lead with the strategic angle (UX as strategy), then evidence from the CV.
+- Lead with the framing set in your role frame above, then evidence from the CV.
 - One page. Cut anything generic. Draw only from the master CV and stated facts;
   use [GAP: ...] rather than inventing anything.
 - Output only the letter body (no header block, no signature scaffolding unless
@@ -208,10 +226,11 @@ def assemble(role, doc_type, config=None):
     """Return everything the API call needs: system, user, model, cv path/text.
     Raises AssemblyError on the guardrail cases (Review category, missing JD)."""
     config = config or load_config()
-    cv_path, master_cv = resolve_master_cv(role.get("category"), config)
+    category = role.get("category")
+    cv_path, master_cv = resolve_master_cv(category, config)
     return {
         "model": config["model"],
-        "system": build_system_prompt(config, master_cv),
+        "system": build_system_prompt(config, master_cv, category=category),
         "user": build_user_prompt(role, doc_type, config),
         "master_cv_path": cv_path,
         "master_cv_text": master_cv,

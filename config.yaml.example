@@ -63,6 +63,18 @@ profile:
     Leadership: Head / VP / Director of Design — design org building, product strategy, operationally complex platforms
     Advisory:   Design advisor — operating models, product strategy
     Senior IC:  Senior Product Designer | Operationally complex platforms, multi-site workflows
+  # Category-conditional positioning for the generation role frame
+  # (prompt_assembly.py's build_role_frame) — takes precedence over
+  # tagline_quote above for any category listed here. This is what the
+  # model reads verbatim when deciding what to lead a CV or cover letter
+  # with, so it's worth writing deliberately per category rather than
+  # reusing one flat line everywhere: a Leadership pitch and a hands-on
+  # Senior IC pitch shouldn't lead with the same thing. Replace this
+  # placeholder text with your own.
+  framing:
+    Leadership: org-scale and platform-level product strategy.
+    Advisory:   diagnosis and operating models, senior counsel rather than delivery.
+    Senior IC:  hands-on craft and shipping end to end. Do not lead with org scale or headcount.
   # Structured, so the language gate has a real declaration to check a
   # posting's requirements against, and so this can never silently drift
   # from what the master CV's own Languages section says — matching
