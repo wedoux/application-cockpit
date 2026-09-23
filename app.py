@@ -33,6 +33,7 @@ import numeric_fact_gate as ng
 import pdf_export
 import prompt_assembly as pa
 import staging
+import style_gate
 import verifier
 from job_scanner import scan_all_companies_detailed, categorize_title
 
@@ -336,7 +337,8 @@ def api_update(role_id):
 # ------------------------------------------------------------------
 
 def run_fidelity_gates(content_md, *, master_cv_text, master_cv_path, jd_text,
-                       profile_text, repairs=(), language_gate=None):
+                       profile_text, repairs=(), language_gate=None, tailored_cv_text=None,
+                       cross_letter_corpus=None):
     """Every check that stands between a piece of text and documents storage,
     in one place, returning the fidelity dict that becomes critic_notes.
     The caller decides what to do about fidelity["numeric_gate"]["blocked"].
@@ -370,6 +372,25 @@ def run_fidelity_gates(content_md, *, master_cv_text, master_cv_path, jd_text,
     fidelity["master_cv_file"] = Path(master_cv_path).name
     fidelity["master_cv_sha256"] = hashlib.sha256(master_cv_text.encode("utf-8")).hexdigest()
     fidelity["jd_sha256"] = hashlib.sha256((jd_text or "").encode("utf-8")).hexdigest()
+    # Advisory only: reports into critic_notes next to verify_fidelity's
+    # flags, never blocks. Style is not discrete the way a number is (a
+    # negative-parallelism regex will occasionally flag an earned contrast),
+    # so this reports and a human decides, until a fixture set says the
+    # false-positive rate is low enough to gate on.
+    #
+    # tailored_cv_text has no caller populating it yet, so run_style_gate's
+    # duplication checks are inert at generation time for now; the offline
+    # scan supplies CV text directly when measuring stored letters.
+    fidelity["style_gate"] = style_gate.run_style_gate(content_md, cv_text=tailored_cv_text)
+    # Cross-letter phrase repetition (pass 4, Task 4) — advisory, the one
+    # check that gets more useful the longer the tool runs, since the
+    # corpus it compares against (every other stored cover letter for this
+    # profile) only grows. None when the caller has nothing to compare
+    # against yet (the CV document, or a role with no other stored letters).
+    fidelity["cross_letter_phrases"] = (
+        style_gate.scan_new_letter_against_corpus(content_md, cross_letter_corpus)
+        if cross_letter_corpus else []
+    )
     # Repairs reshape model output that passed the API's own JSON syntax
     # check but not the schema — never apply that invisibly (schema
     # validation passes a well-formed wrong answer). A hand-edit has none.
@@ -379,6 +400,19 @@ def run_fidelity_gates(content_md, *, master_cv_text, master_cv_path, jd_text,
     if language_gate is not None:
         fidelity["language_gate"] = language_gate
     return fidelity
+
+
+def cross_letter_corpus(conn, exclude_role_id):
+    """Every other stored cover letter for this profile (pass 4, Task 4) —
+    every document, not just one per role, so a phrase reused across two
+    versions of the SAME other role's letter still counts. Excludes
+    exclude_role_id's own documents: comparing a role's letter against its
+    own earlier draft isn't a template signal, it's just the same content."""
+    rows = conn.execute(
+        "SELECT id, content_md FROM documents WHERE doc_type = 'cover_letter' AND role_id != ?",
+        (exclude_role_id,),
+    ).fetchall()
+    return {row["id"]: row["content_md"] for row in rows}
 
 
 def numeric_block_payload(numeric, doc_type):
@@ -486,6 +520,7 @@ def api_generate(role_id):
             repairs=gen["repairs"],
             language_gate={"verdict": lang_gate_verdict, "overridden": lang_gate_overridden,
                            **lang_gate_result},
+            cross_letter_corpus=cross_letter_corpus(conn, role_id) if dt == "cover_letter" else None,
         )
         numeric = fidelity["numeric_gate"]
         if numeric["blocked"]:
@@ -666,6 +701,9 @@ def api_document_edit(doc_id):
         master_cv_text=master_cv_text, master_cv_path=master_cv_path,
         jd_text=role["jd_text"], profile_text=profile_text,
         language_gate=parent_fidelity.get("language_gate"),
+        # doc["doc_type"] is always "cover_letter" here, checked earlier in
+        # this route, so this is never wasted for a CV edit.
+        cross_letter_corpus=cross_letter_corpus(conn, doc["role_id"]),
     )
     numeric = fidelity["numeric_gate"]
     if numeric["blocked"]:

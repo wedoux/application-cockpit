@@ -107,9 +107,9 @@ def test_generate_commits_earlier_doc_types_when_a_later_one_fails_its_gate(monk
 
 
 def test_generate_commits_earlier_doc_types_when_a_later_one_errors(monkeypatch):
-    """Same regression as above, via the generation-error path rather than the
-    numeric-gate path — both return early from inside the doc_types loop and
-    both used to lose everything before them."""
+    """Same regression as above, via the generation-error path (line
+    app.py:459) rather than the numeric-gate path — both return early from
+    inside the doc_types loop and both used to lose everything before them."""
     role_id = _insert_role()
 
     def _gen(role, doc_type, config=None):
@@ -145,6 +145,88 @@ def test_generate_passes_when_every_number_is_sourced(monkeypatch):
     conn.close()
     notes = json.loads(row["critic_notes"])
     assert notes["numeric_gate"]["blocked"] is False
+
+
+# ------------------------------------------------------------------
+# Cross-letter phrase repetition (implementation pass 4, Task 4) — advisory,
+# lands in critic_notes, compares a new letter against every OTHER stored
+# cover letter for this profile.
+# ------------------------------------------------------------------
+
+def test_cross_letter_phrases_catches_a_repeat_from_another_role(monkeypatch):
+    role_a = _insert_role(company="A Corp")
+    role_b = _insert_role(company="B Corp")
+    shared_phrase = "most people applying here will make the craft case"
+
+    monkeypatch.setattr(generation, "generate", _fake_generate(f"{shared_phrase} from Figma."))
+    client = app.app.test_client()
+    r = client.post(f"/api/roles/{role_a}/generate", json={"doc_types": ["cover_letter"]})
+    assert r.status_code == 200
+
+    monkeypatch.setattr(generation, "generate", _fake_generate(f"{shared_phrase}, honestly."))
+    r = client.post(f"/api/roles/{role_b}/generate", json={"doc_types": ["cover_letter"]})
+    assert r.status_code == 200
+
+    conn = dbmod.connect()
+    row = conn.execute(
+        "SELECT critic_notes FROM documents WHERE role_id = ? AND doc_type = 'cover_letter'",
+        (role_b,),
+    ).fetchone()
+    conn.close()
+    matches = json.loads(row["critic_notes"])["cross_letter_phrases"]
+    assert matches
+    assert "most people applying" in matches[0]["phrase"]
+
+
+def test_cross_letter_phrases_is_empty_when_nothing_else_is_stored(monkeypatch):
+    role_id = _insert_role()
+    monkeypatch.setattr(generation, "generate", _fake_generate("A clean draft with nothing to flag."))
+    client = app.app.test_client()
+    r = client.post(f"/api/roles/{role_id}/generate", json={"doc_types": ["cover_letter"]})
+    assert r.status_code == 200
+
+    conn = dbmod.connect()
+    row = conn.execute(
+        "SELECT critic_notes FROM documents WHERE role_id = ? AND doc_type = 'cover_letter'",
+        (role_id,),
+    ).fetchone()
+    conn.close()
+    assert json.loads(row["critic_notes"])["cross_letter_phrases"] == []
+
+
+def test_cross_letter_phrases_is_empty_for_the_cv_document(monkeypatch):
+    role_id = _insert_role()
+    monkeypatch.setattr(generation, "generate", _fake_generate("A clean draft with nothing to flag."))
+    client = app.app.test_client()
+    r = client.post(f"/api/roles/{role_id}/generate", json={"doc_types": ["cv"]})
+    assert r.status_code == 200
+
+    conn = dbmod.connect()
+    row = conn.execute(
+        "SELECT critic_notes FROM documents WHERE role_id = ? AND doc_type = 'cv'",
+        (role_id,),
+    ).fetchone()
+    conn.close()
+    assert json.loads(row["critic_notes"])["cross_letter_phrases"] == []
+
+
+# ------------------------------------------------------------------
+# Style gate — advisory only, lands in critic_notes, never blocks
+# ------------------------------------------------------------------
+
+def test_style_gate_lands_in_critic_notes_and_never_blocks(monkeypatch):
+    role_id = _insert_role()
+    draft = ("Quality is a strategy, not a finishing touch. " * 5)  # a real style violation
+    monkeypatch.setattr(generation, "generate", _fake_generate(draft, master_cv_text=draft))
+    client = app.app.test_client()
+    r = client.post(f"/api/roles/{role_id}/generate", json={"doc_types": ["cover_letter"]})
+    assert r.status_code == 200, "a style-gate finding must never block generation"
+
+    conn = dbmod.connect()
+    row = conn.execute("SELECT critic_notes FROM documents WHERE role_id = ?", (role_id,)).fetchone()
+    conn.close()
+    notes = json.loads(row["critic_notes"])
+    assert notes["style_gate"]["negative_parallelism"]["comma_not"]["count"] == 5
 
 
 # ------------------------------------------------------------------
