@@ -29,6 +29,7 @@ from dotenv import load_dotenv
 import cover_letter_schema
 import cv_schema
 import prompt_assembly as pa
+import style_gate
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -256,6 +257,83 @@ def _validate_plan(plan, tailored_cv_text, jd_text, min_points, max_points):
     return schema_errors, source_line_errors, jd_trace_errors, jd_pointer_errors
 
 
+def write_letter_from_plan(client, model, system, write_user, plan, tolerance_pct):
+    """The write step and both of its correction loops, given a plan that has
+    already been validated.
+
+    Public, and factored out of _generate_cover_letter_plan_then_write, for
+    one reason: cover_letter_reliability.py runs this same step five times
+    against a single plan to measure variance, and a harness carrying its
+    own copy of the loops would be measuring a write step that isn't the one
+    that ships. Same rule as style_gate's single implementation and
+    staging.py calling into gmail_sweep_apply.py: two copies drift, and then
+    the measurement quietly stops describing the product.
+
+    Order matters. Length correction runs first and commitment coverage
+    second, because a length correction is the edit most likely to cut the
+    clause carrying a figure: told to cut, the model cuts "18 designers"
+    before it cuts an adjective. Coverage has to read the text that will
+    actually be stored, not an earlier draft of it.
+
+    Both loops retry exactly once and then give up, returning the text with
+    the failure flagged. Neither blocks."""
+    resp, text = _write_call(client, model, system, write_user)
+    usage = _usage_dict(resp.usage)
+    cost = _cost(model, resp.usage)
+
+    target_words = plan["target_words"]
+    tolerance_words = target_words * tolerance_pct / 100
+    actual_words = len(text.split())
+
+    word_count_retried = False
+    if actual_words > target_words + tolerance_words:
+        word_count_retried = True
+        length_note = (
+            f"\n\n# Length correction\n\nYour previous attempt was {actual_words} words against a "
+            f"target of {target_words} (+/-{tolerance_pct}%). Cut it down, aim for {target_words} "
+            "words. Cut content, don't just shorten sentences; the argument should still be complete."
+        )
+        resp, text = _write_call(client, model, system, write_user + length_note)
+        usage = _add_usage(usage, _usage_dict(resp.usage))
+        cost = round(cost + _cost(model, resp.usage), 4)
+        actual_words = len(text.split())
+
+    coverage = style_gate.scan_commitment_coverage(text, plan)
+    coverage_retried = False
+    first_pass_coverage = coverage
+    if coverage and coverage["misses"]:
+        coverage_retried = True
+        coverage_note = (
+            "\n\n# Commitments your plan made that this letter does not keep\n\n"
+            + "\n".join(f"- {m}" for m in coverage["misses"])
+            + f"\n\nWrite the letter again, keeping every one of those. Stay at about "
+              f"{target_words} words. Fold the missing figure into the paragraph that "
+              "already argues that point rather than adding a new paragraph for it."
+        )
+        resp, text = _write_call(client, model, system, write_user + coverage_note)
+        usage = _add_usage(usage, _usage_dict(resp.usage))
+        cost = round(cost + _cost(model, resp.usage), 4)
+        actual_words = len(text.split())
+        coverage = style_gate.scan_commitment_coverage(text, plan)
+
+    return {
+        "text": text,
+        "resp": resp,
+        "usage": usage,
+        "cost_usd": round(cost, 4),
+        "target_words": target_words,
+        "actual_words": actual_words,
+        "word_count_retried": word_count_retried,
+        "coverage_retried": coverage_retried,
+        "commitment_coverage": coverage,
+        # The check's verdict on the FIRST attempt, before any correction.
+        # Distinguishing this from the final one is what separates "the write
+        # step delivers" from "the retry loop rescues it", which is the whole
+        # question the reliability harness exists to answer.
+        "first_pass_coverage": first_pass_coverage,
+    }
+
+
 def _generate_cover_letter_plan_then_write(client, role, config, system, tailored_cv_text):
     """Two-step cover letter generation: a small structured plan (forced tool
     call, validated, retried once with the validation error fed back — same
@@ -331,27 +409,15 @@ def _generate_cover_letter_plan_then_write(client, role, config, system, tailore
         if errors:
             raise GenerationError(f"cover letter plan failed validation after retry: {'; '.join(errors)}")
 
-    # --- Write step, with one length-correction retry ---
+    # --- Write step and its two correction loops ---
     write_user = pa.build_cover_letter_write_user_prompt(role, config, tailored_cv_text, plan)
-    resp, text = _write_call(client, model, system, write_user)
-    usage = _add_usage(usage, _usage_dict(resp.usage))
-    cost = round(cost + _cost(model, resp.usage), 4)
-
-    target_words = plan["target_words"]
-    tolerance_words = target_words * tolerance_pct / 100
-    actual_words = len(text.split())
-    word_count_retried = False
-    if actual_words > target_words + tolerance_words:
-        word_count_retried = True
-        length_note = (
-            f"\n\n# Length correction\n\nYour previous attempt was {actual_words} words against a "
-            f"target of {target_words} (+/-{tolerance_pct}%). Cut it down — aim for {target_words} "
-            "words. Cut content, don't just shorten sentences; the argument should still be complete."
-        )
-        resp, text = _write_call(client, model, system, write_user + length_note)
-        usage = _add_usage(usage, _usage_dict(resp.usage))
-        cost = round(cost + _cost(model, resp.usage), 4)
-        actual_words = len(text.split())
+    w = write_letter_from_plan(client, model, system, write_user, plan, tolerance_pct)
+    usage = _add_usage(usage, w["usage"])
+    cost = round(cost + w["cost_usd"], 4)
+    text, resp = w["text"], w["resp"]
+    target_words, actual_words = w["target_words"], w["actual_words"]
+    word_count_retried, coverage_retried = w["word_count_retried"], w["coverage_retried"]
+    coverage = w["commitment_coverage"]
 
     return {
         "content_md": text,
@@ -361,7 +427,7 @@ def _generate_cover_letter_plan_then_write(client, role, config, system, tailore
         "cost_usd": cost,
         "stop_reason": resp.stop_reason,
         "truncated": resp.stop_reason == "max_tokens",
-        "retried": plan_retried or word_count_retried,
+        "retried": plan_retried or word_count_retried or coverage_retried,
         "repairs": [],
         "plan_retried": plan_retried,
         "plan_retry_reason": plan_retry_reason,
@@ -369,6 +435,15 @@ def _generate_cover_letter_plan_then_write(client, role, config, system, tailore
         "word_count_retried": word_count_retried,
         "target_words": target_words,
         "actual_words": actual_words,
+        "coverage_retried": coverage_retried,
+        "commitment_coverage": coverage,
+        # The first attempt's verdict, before any correction, so the harness
+        # can tell "the write step delivered" from "the retry rescued it".
+        "first_pass_coverage": w["first_pass_coverage"],
+        # True only when the retry ran and the letter still dropped a
+        # committed figure. That is the flag worth reading: it means the
+        # write step was told exactly what it left out and left it out again.
+        "commitment_missed": bool(coverage and coverage["misses"]),
     }
 
 

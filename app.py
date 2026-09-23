@@ -540,6 +540,16 @@ def api_generate(role_id):
             tailored_cv_text=tailored_cv_text if dt == "cover_letter" else None,
             cross_letter_corpus=cross_letter_corpus(conn, role_id) if dt == "cover_letter" else None,
         )
+        # Commitment coverage is computed inside generation, where the plan
+        # exists; it rides into critic_notes with the other advisory checks
+        # rather than being recomputed here, which couldn't be done anyway
+        # without the plan. None on the freeform path, and absent from
+        # critic_notes entirely in that case rather than stored as a
+        # misleading empty pass.
+        if gen.get("commitment_coverage") is not None:
+            fidelity["commitment_coverage"] = gen["commitment_coverage"]
+            fidelity["commitment_retried"] = gen.get("coverage_retried", False)
+
         numeric = fidelity["numeric_gate"]
         if numeric["blocked"]:
             conn.close()

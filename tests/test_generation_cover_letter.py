@@ -81,7 +81,16 @@ GOOD_PLAN = {
 
 
 def _words(n):
-    return " ".join(["word"] * n)
+    """An n-word filler letter that keeps GOOD_PLAN's committed figure.
+
+    The figure matters. The write step's commitment-coverage check (pass 5)
+    retries once when a letter drops a number its own plan rests on, and
+    GOOD_PLAN's second proof point is evidenced by "Built a 700+ component
+    system from scratch across 7 products". Filler made of the bare word
+    "word" carries no digits, so every test in this file would spend an
+    extra write call on a retry it isn't about. Tests that want that miss
+    build their own text."""
+    return " ".join(["word"] * (n - 2) + ["700+", "components"])
 
 
 def test_happy_path_no_retries():
@@ -327,3 +336,98 @@ def test_generate_defaults_to_freeform_mode_when_unconfigured(monkeypatch):
 
     generation.generate(ROLE, "cover_letter", config={"model": "claude-sonnet-5", "profile": {}})
     assert calls == ["freeform"]
+
+
+# ------------------------------------------------------------------
+# Commitment coverage wiring (pass 5)
+#
+# The check itself is tested in test_commitment_coverage.py. These cover
+# only its orchestration here: one retry, never more, and a flagged result
+# rather than an exception when the retry doesn't fix it.
+# ------------------------------------------------------------------
+
+def _letter_without_the_figure(n=290):
+    """Same length, no digits, so GOOD_PLAN's "700+ ... 7 products" point
+    has nothing to trace to."""
+    return " ".join(["word"] * n)
+
+
+def test_dropped_figure_triggers_exactly_one_write_retry():
+    client = _Client([
+        _ToolResp(GOOD_PLAN),
+        _TextResp(_letter_without_the_figure()),   # drops 700 and 7
+        _TextResp(_words(290)),                     # retry puts 700+ back
+    ])
+    result = generation._generate_cover_letter_plan_then_write(
+        client, ROLE, CONFIG, SYSTEM, CV_TEXT)
+    assert client.messages.calls == 3
+    assert result["coverage_retried"] is True
+    assert result["commitment_missed"] is False
+    assert result["retried"] is True
+    assert result["commitment_coverage"]["covered"] is True
+
+
+def test_retry_that_still_drops_the_figure_is_stored_and_flagged_not_raised():
+    """Advisory, same as the length loop: two bad attempts return a letter
+    with the miss recorded. Blocking here would throw away a draft that is
+    wrong in one paragraph and fine everywhere else."""
+    client = _Client([
+        _ToolResp(GOOD_PLAN),
+        _TextResp(_letter_without_the_figure()),
+        _TextResp(_letter_without_the_figure()),
+    ])
+    result = generation._generate_cover_letter_plan_then_write(
+        client, ROLE, CONFIG, SYSTEM, CV_TEXT)
+    assert client.messages.calls == 3, "one retry, not a loop"
+    assert result["coverage_retried"] is True
+    assert result["commitment_missed"] is True
+    assert result["content_md"] == _letter_without_the_figure()
+    assert result["commitment_coverage"]["points_missing_numbers"] == 1
+
+
+def test_the_retry_note_names_the_missing_figure():
+    """A retry that doesn't say what went missing is just a re-roll."""
+    seen = {}
+
+    class _Capturing(_Messages):
+        def create(self, **kwargs):
+            seen.setdefault("prompts", []).append(kwargs["messages"][0]["content"])
+            return super().create(**kwargs)
+
+    client = _Client([])
+    client.messages = _Capturing([
+        _ToolResp(GOOD_PLAN),
+        _TextResp(_letter_without_the_figure()),
+        _TextResp(_words(290)),
+    ])
+    generation._generate_cover_letter_plan_then_write(client, ROLE, CONFIG, SYSTEM, CV_TEXT)
+    retry_prompt = seen["prompts"][-1]
+    assert "700" in retry_prompt
+    assert "proof point 2" in retry_prompt
+
+
+def test_coverage_is_checked_after_the_length_correction_not_before():
+    """A length correction is the edit most likely to cut the clause holding
+    the figure, so the check has to read the text that will be stored."""
+    client = _Client([
+        _ToolResp(GOOD_PLAN),
+        _TextResp(_words(400)),                    # over target, has 700+
+        _TextResp(_letter_without_the_figure()),   # shortened, figure gone
+        _TextResp(_words(290)),                    # coverage retry restores it
+    ])
+    result = generation._generate_cover_letter_plan_then_write(
+        client, ROLE, CONFIG, SYSTEM, CV_TEXT)
+    assert client.messages.calls == 4
+    assert result["word_count_retried"] is True
+    assert result["coverage_retried"] is True
+    assert result["commitment_missed"] is False
+
+
+def test_freeform_path_reports_no_coverage_rather_than_an_empty_pass():
+    """generate() on the freeform path has no plan, so commitment_coverage
+    must be absent rather than a clean-looking dict of nothing."""
+    client = _Client([_ToolResp(GOOD_PLAN), _TextResp(_words(290))])
+    result = generation._generate_cover_letter_plan_then_write(
+        client, ROLE, CONFIG, SYSTEM, CV_TEXT)
+    assert result["commitment_coverage"] is not None  # plan path does report
+    assert generation.style_gate.scan_commitment_coverage("any text", None) is None

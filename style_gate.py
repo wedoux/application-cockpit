@@ -497,6 +497,280 @@ def scan_paraphrase_duplication(letter_text, cv_text, threshold=PARAPHRASE_SIMIL
 
 
 # ------------------------------------------------------------------
+# Commitment coverage (pass 5): does the written letter deliver what its
+# own validated plan committed to?
+#
+# cover_letter_schema checks the plan before the write step runs — its
+# shape, its CV pointers, its JD traces. Pass 4 showed that half of the
+# problem solved and staying solved: selection became correct, 0 retries in
+# 4 runs. Nothing checked the other half, whether the prose carries the
+# commitment the plan made. Two runs from the same validated plan for one Leadership role
+# produced one letter naming 18 designers managed and one that never
+# mentions management.
+#
+# Only the literal number check gates. Pass 5 was specified with a second
+# half, claims verified by similarity using the TF-IDF functions above, and
+# that half was built, measured and cut. Twelve proof points from the four
+# pass-4 letters were hand-labelled for whether the commitment reached the
+# prose (10 delivered, 2 dropped), and no text-overlap measure separated
+# them:
+#
+#   measure                       lowest delivered   highest dropped
+#   cosine, claim vs paragraph    0.075              0.304
+#   cosine, requirement           0.079              0.126
+#   IDF-weighted recall, claim    0.413              0.416
+#   IDF-weighted recall, req.     0.270              0.369
+#
+# Every one overlaps, and cosine inverts: the letter that dropped
+# management entirely scores 0.304 against the claim while the letter that
+# delivered it scores 0.229. That is not a threshold that needs tuning, it
+# is the wrong instrument. Every paragraph of a cover letter is topically
+# close to every claim, because both are built from the same CV, so overlap
+# measures the shared source rather than the delivery. A retry driven off
+# any of these thresholds would fire on delivered commitments at about the
+# rate it fires on dropped ones.
+#
+# The scores are still computed and reported, because a reviewer reading a
+# flagged letter wants to see them, and because a future measure worth
+# trusting (an entailment check rather than an overlap one) would need this
+# baseline to beat. They do not drive the retry. See
+# tests/test_commitment_coverage.py.
+#
+# Numbers come from cv_source_line as well as claim, which is not obvious
+# and is the whole point. In both observed failures the missing digits were
+# only ever in the source line. One plan carried "12 studies with
+# 240+ participants" as its cv_source_line against a claim that said "at
+# scale", and another carried "18 designers" against a claim reading "at
+# meaningful scale". A check reading claims alone would have passed both
+# letters that dropped the evidence, which makes it worse than no check.
+#
+# A proof point's numbers pass when at least one lands, not all of them. A
+# source line like "700+ components and variants across 7 products, cutting
+# front-end build time by ~52%" carries three figures and a letter citing
+# two of them has kept the evidence; demanding all three would fail good
+# letters for leaving out a number nobody needed. The per-number detail is
+# reported either way, so the retry can name what went missing.
+# ------------------------------------------------------------------
+
+# Diagnostic only, not gates. Set at the midpoint of the overlapping
+# delivered/dropped ranges measured above, so "below threshold" reads as
+# "worth a look" and never as "retry this". Nothing in misses uses them.
+COMMITMENT_CLAIM_THRESHOLD = 0.20
+COMMITMENT_REQUIREMENT_THRESHOLD = 0.12
+
+_NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _normalize_number(raw):
+    return raw.replace(",", "").rstrip(".")
+
+
+def _looks_like_year(value):
+    """A bare four-digit number in calendar range is almost always a date on
+    a CV bullet ("launched globally in August 2025"), not the evidence the
+    proof point rests on. Excluded from the commitment set so the retry note
+    doesn't send the write step chasing a year nobody asked it to state."""
+    return len(value) == 4 and value.isdigit() and 1900 <= int(value) <= 2100
+
+
+def _commitment_numbers(*texts):
+    """Distinct numbers this proof point commits to, in order, years out."""
+    out, seen = [], set()
+    for text in texts:
+        for raw in _NUMBER_RE.findall(text or ""):
+            value = _normalize_number(raw)
+            if not value or _looks_like_year(value) or value in seen:
+                continue
+            seen.add(value)
+            out.append(value)
+    return out
+
+
+_UNITS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+          "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+          "sixteen", "seventeen", "eighteen", "nineteen"]
+_TENS = {2: "twenty", 3: "thirty", 4: "forty", 5: "fifty",
+         6: "sixty", 7: "seventy", 8: "eighty", 9: "ninety"}
+
+
+def _spell_below_100(n):
+    if n < 20:
+        return [_UNITS[n]]
+    tens, unit = divmod(n, 10)
+    base = _TENS[tens]
+    if unit == 0:
+        return [base]
+    # Both spellings appear in real prose, and neither is wrong.
+    return [f"{base}-{_UNITS[unit]}", f"{base} {_UNITS[unit]}"]
+
+
+def _number_word_forms(value):
+    """English spellings of a number, so "eighteen designers" counts as
+    delivering the figure 18.
+
+    This is not decoration. In the pass-5 run the write step delivered
+    a management commitment in five runs out of five, and a
+    digits-only check scored it three, because two of those letters wrote
+    "a team of eighteen designers" rather than "18". The check called a kept
+    promise a broken one, and would have driven a retry against a letter
+    that was already correct.
+
+    Generates the target's spellings and looks for those, rather than
+    parsing every number word in the letter: the target is known and small,
+    the letter is not."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return []
+    if n < 0 or n > 999_999:
+        return []
+    if n < 100:
+        return _spell_below_100(n)
+    if n < 1000:
+        hundreds, rest = divmod(n, 100)
+        head = f"{_UNITS[hundreds]} hundred"
+        if rest == 0:
+            return [head]
+        forms = []
+        for tail in _spell_below_100(rest):
+            forms.append(f"{head} {tail}")
+            forms.append(f"{head} and {tail}")
+        return forms
+    if n % 1000 == 0:
+        thousands = n // 1000
+        if thousands < 100:
+            return [f"{t} thousand" for t in _spell_below_100(thousands)]
+    return []
+
+
+def _number_in_text(value, text):
+    """Digits or the written-out word. Digit match is boundary-aware, so 18
+    doesn't match inside 180 or 2018, and commas are normalized away on both
+    sides so 1,200 finds 1200.
+
+    What this still cannot see: a figure delivered as a description rather
+    than a number. A letter writing "cut build time by roughly half" has
+    kept a commitment to 52% in every sense that matters to a reader, and
+    this check scores it missing. That is why a proof point passes on one of
+    its figures landing rather than all of them."""
+    if re.search(rf"(?<!\d){re.escape(value)}(?!\d)", text.replace(",", "")):
+        return True
+    return any(re.search(rf"\b{re.escape(form)}\b", text, re.IGNORECASE)
+               for form in _number_word_forms(value))
+
+
+def scan_commitment_coverage(letter_text, plan,
+                             claim_threshold=COMMITMENT_CLAIM_THRESHOLD,
+                             requirement_threshold=COMMITMENT_REQUIREMENT_THRESHOLD):
+    """Per proof point: did its figures, its claim and the requirement it
+    chose to answer all reach the prose? Returns None when there is no plan
+    to check against (the freeform path), so callers can treat "not
+    applicable" and "nothing missing" as the different things they are."""
+    if not isinstance(plan, dict):
+        return None
+    proof_points = plan.get("proof_points") or []
+    if not proof_points:
+        return None
+
+    paragraphs = _non_gap_paragraphs(letter_text)
+    claims = [(pp.get("claim") or "") for pp in proof_points]
+    requirements = [(pp.get("jd_requirement") or "") for pp in proof_points]
+    corpus = ([_words(p) for p in paragraphs]
+              + [_words(c) for c in claims]
+              + [_words(r) for r in requirements])
+    idf = _idf(corpus) if corpus else {}
+    para_vectors = [(_tfidf_vector(_words(p), idf), p) for p in paragraphs]
+
+    def _best(text):
+        if not text or not para_vectors:
+            return 0.0, ""
+        v = _tfidf_vector(_words(text), idf)
+        best_sim, best_par = 0.0, ""
+        for pv, par in para_vectors:
+            sim = _cosine(v, pv)
+            if sim > best_sim:
+                best_sim, best_par = sim, par
+        return round(best_sim, 3), best_par
+
+    per_point, misses, similarity_flags = [], [], []
+    for i, pp in enumerate(proof_points):
+        claim, requirement = claims[i], requirements[i]
+        source_line = pp.get("cv_source_line") or ""
+        numbers = _commitment_numbers(claim, source_line)
+        found = [n for n in numbers if _number_in_text(n, letter_text)]
+        missing = [n for n in numbers if n not in found]
+        claim_sim, claim_par = _best(claim)
+        req_sim, _ = _best(requirement)
+
+        # The only gate. A proof point carrying no figure at all passes here
+        # vacuously, which is honest: nothing in this module can currently
+        # tell whether such a commitment landed. 7 of the 12 labelled points
+        # were in that position, so this check covers rather less than half
+        # of what the plan promises, and the report says so rather than
+        # reporting silence as coverage.
+        numbers_ok = (not numbers) or bool(found)
+        # Advisory. Measured, reported, never retried on. See the note above.
+        claim_ok = claim_sim >= claim_threshold
+        requirement_ok = req_sim >= requirement_threshold
+
+        per_point.append({
+            "index": i,
+            "claim": claim,
+            "jd_requirement": requirement,
+            "numbers": numbers,
+            "numbers_found": found,
+            "numbers_missing": missing,
+            "numbers_ok": numbers_ok,
+            "checkable": bool(numbers),
+            "claim_similarity": claim_sim,
+            "claim_above_threshold": claim_ok,
+            "claim_best_paragraph": claim_par[:120],
+            "requirement_similarity": req_sim,
+            "requirement_above_threshold": requirement_ok,
+            "covered": numbers_ok,
+        })
+
+        label = f"proof point {i + 1}"
+        if not numbers_ok:
+            misses.append(
+                f"{label} rests on {', '.join(numbers)} and the letter states none of "
+                f"them. Name at least one of those figures in the prose."
+            )
+        if not claim_ok:
+            similarity_flags.append(
+                f"{label}: claim overlap with its closest paragraph is {claim_sim}, "
+                f"below {claim_threshold}. Advisory only, this measure does not "
+                f"separate delivered commitments from dropped ones."
+            )
+        if not requirement_ok:
+            similarity_flags.append(
+                f"{label}: requirement overlap is {req_sim}, below "
+                f"{requirement_threshold}. Advisory only, same caveat."
+            )
+
+    covered_points = sum(1 for p in per_point if p["covered"])
+    return {
+        "per_proof_point": per_point,
+        "proof_points_total": len(per_point),
+        "proof_points_covered": covered_points,
+        "numbers_committed": sum(len(p["numbers"]) for p in per_point),
+        "numbers_landed": sum(len(p["numbers_found"]) for p in per_point),
+        "points_missing_numbers": sum(1 for p in per_point if not p["numbers_ok"]),
+        # How much of the plan this check can actually speak to. A letter
+        # reporting covered=True with checkable_points=0 has been checked
+        # for nothing at all, and the two are reported together so that
+        # can't read as a pass.
+        "checkable_points": sum(1 for p in per_point if p["checkable"]),
+        "paragraphs_scored": len(paragraphs),
+        "misses": misses,
+        "similarity_flags": similarity_flags,
+        "covered": not misses,
+        "claim_threshold": claim_threshold,
+        "requirement_threshold": requirement_threshold,
+    }
+
+
+# ------------------------------------------------------------------
 # Seam-risk proxies (implementation pass 3): two deterministic checks for
 # whether a letter, or a set of letters, reads "assembled" rather than
 # written — the risk raised against the plan-then-write design before it
