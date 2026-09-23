@@ -44,10 +44,12 @@ DEFAULT_COVER_LETTER_MODE = "freeform"
 DEFAULT_TARGET_WORDS = 300
 DEFAULT_WORD_TOLERANCE_PCT = 10
 
-# (input, output) USD per 1M tokens. Sonnet 5 is on intro pricing through
-# 2026-08-31 ($2/$10), reverting to $3/$15 after — update then.
+# (input, output) USD per 1M tokens. Sonnet 5's intro pricing ($2/$10) ended
+# 2026-08-31 as scheduled, and this was not updated until 2026-09-22, so every
+# cost logged in between understated real spend by roughly half. Now the
+# standing $3/$15 rate the original comment already named as its replacement.
 PRICING = {
-    "claude-sonnet-5": (2.00, 10.00),
+    "claude-sonnet-5": (3.00, 15.00),
     "claude-opus-4-8": (5.00, 25.00),
     "claude-haiku-4-5": (1.00, 5.00),
 }
