@@ -7,9 +7,12 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 5
     groups:
-      python-dependencies:
+      python-patch-minor:
         patterns:
           - "*"
+        update-types:
+          - "patch"
+          - "minor"
 
   # The actions used inside .github/workflows/ci.yml
   - package-ecosystem: "github-actions"
