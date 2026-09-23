@@ -33,9 +33,11 @@ than reimplementing, so a role blocked in the ingest panel is blocked by the sam
 `app._find_duplicate` the manual-add button uses. Two rules would drift, and what counted as a
 duplicate would start depending on which door a role came through.
 
-**One `style_gate.py`, two callers, no second copy.** The live generation path
-(`app.py`'s `run_fidelity_gates`) and the eval harness (`cover_letter_experiment.py`)
-import the same module. A harness with its own copy of the patterns would drift from the
+**One `style_gate.py`, three callers, no second copy.** The live generation path
+(`app.py`'s `run_fidelity_gates`) and both eval harnesses (`cover_letter_experiment.py`,
+`cover_letter_reliability.py`) import the same module. `generation.write_letter_from_plan`
+is factored out for the same reason: the reliability harness drives the real write step
+rather than a copy of it. A harness with its own copy of the patterns would drift from the
 gate it's supposed to be measuring, and the drift would look like a result. The
 negative-parallelism categories are also mutually exclusive by construction (`_COMMA_NOT_RE`
 excludes `not just` so `_COMMA_NOT_JUST_RE` owns those spans), which is what keeps one
@@ -52,8 +54,8 @@ reachable in history, or untracked and not ignored. Deliberate exceptions go in
 `.privacy-allowlist`, which drops them from the exit code and keeps printing them anyway. A
 leak found after a push can't be unpublished.
 
-492 tests, about a minute (`python -m pytest`). Three of them skip until you map a CV
-for all three categories and have a real `cockpit.db`, so a fresh clone prints 489 passed,
+515 tests, about a minute (`python -m pytest`). Three of them skip until you map a CV
+for all three categories and have a real `cockpit.db`, so a fresh clone prints 512 passed,
 3 skipped. Green before your change, green after.
 
 ## What I'll decline

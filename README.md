@@ -47,7 +47,9 @@ SOURCE  ──▶  GATE  ──▶  GENERATE  ──▶  VERIFY  ──▶  REND
   target. The plan is validated (does that requirement really appear in the posting, does
   that CV line really exist) before a second free-prose call writes the letter from it.
 
-It ships off by default. [What it doesn't do](#what-it-doesnt-do) says why.
+It ships off, permanently, and [What it doesn't do](#what-it-doesnt-do) says why. The
+second path is kept reachable and tested rather than deleted, because the measurements
+that rejected it are worth being able to reproduce.
 
 ![A generated CV rendered to its final form, showing the Projects section](docs/images/cv-preview.png)
 
@@ -85,31 +87,57 @@ and generation isn't attempted at all. No API call happens.
 The source-fidelity check is deliberately advisory rather than blocking: it flags names
 and claims that don't appear in your CV, and you decide. Not everything should be a wall.
 
-### The writing rules were the test case
+### Four times a control was not controlling anything
 
-My writing rules are loaded verbatim into the system prompt on every call. They name
-"it's not X, it's Y" as a construction to kill. Every cover letter the system had ever
-produced used it anyway. Sixteen letters, sixteen violations. The instruction was sitting
-right there in the context window and was being ignored, quietly, every time.
+The gates above are the easy half. The harder lesson came from the gates themselves. Four
+times in this project, something that looked like a safeguard turned out not to be one, and
+not one of them announced it.
 
-So the rules stopped being an instruction and became `style_gate.py`: banned constructions
-as regexes, em-dash counts, cursed vocabulary, word count. One implementation, imported by
-both the live generation path and the offline eval harness, because two copies would drift
-and then whether a draft was acceptable would depend on which door it came through.
+**The writing rules were loaded into every call and ignored in every letter.** My writing
+rules go verbatim into the system prompt. They name "it's not X, it's Y" as a construction
+to kill. Every cover letter the tool had ever produced used it anyway: sixteen letters,
+sixteen violations, and sixteen over the word ceiling at a median of 538 words against a
+300-word target. The instruction was sitting in the context window being ignored, quietly,
+every time. Found by scanning the stored letters instead of trusting the prompt.
 
-Then I ran it over every letter already in the database, before changing any prompt. That
-baseline is what turned one bad letter into a measured pattern:
+**The CI workflow had never run.** A committed workflow ran `pip-audit` and the full suite
+on every push, with a commit message explaining why that mattered before merging a
+dependency bump. It had never executed. Not once, on any commit, because Actions was
+disabled at the repository level. The file sat there looking like a gate while every push
+went in unchecked. Found by querying the Actions API instead of reading the YAML.
 
-- **16 of 16** letters over the word ceiling. Median 538 words against a 300-word target.
-- **16 of 16** carrying at least one instance of the banned construction.
-- The letter that started the investigation turned out to be *better* than median on three
-  of the four measures. It wasn't a bad draft. It was a normal one.
+**A check called a kept promise broken.** A later gate verifies that a generated letter
+actually delivers the figures its own plan committed to. It scored a batch and reported one
+commitment dropped in two runs out of five. Both letters had delivered it, spelled out as
+"eighteen designers" rather than "18". The check was wrong, and it had fired corrective
+retries against letters that were already correct, which is worse than not checking at all.
+Found by reading the letters it flagged instead of the score it produced.
+
+**An experiment reported success over a traceback.** The script producing those numbers
+exited zero while dying on a Python exception, because the shell reported the exit status
+of the `tee` it was piped into rather than the program's. A failed experiment that reports
+success is exactly how a non-result becomes a result.
+
+Three of those four were emitting confident, plausible output the entire time they were
+broken. Every one was caught by checking the control itself rather than reading what it
+said. That is the actual thesis of this repository, and it is why the checks here have their
+own tests, why the eval harness and the live path import the same module instead of keeping
+two copies, and why the experiments below were pre-registered.
+
+The first one is also the reason `style_gate.py` exists: the rules stopped being an
+instruction and became code. Banned constructions as regexes, em-dash counts, cursed
+vocabulary, word count. One implementation, imported by both the live generation path and
+the offline harness, because two copies drift and then whether a draft is acceptable starts
+depending on which door it came through.
 
 **An explicit schema field did what the instruction could not.** Those sixteen letters were
 all told "one page" in the prompt. All sixteen ignored it, by a stable margin, which is the
-tell that a prompt line isn't doing any work. Moving the same constraint into a required
-`target_words` field on a structured plan, with a retry loop behind it, landed every letter
-inside its band. The retry loop never fired once. The field alone did it.
+tell that a prompt line is doing no work. Moving the same constraint into a required
+`target_words` field on a structured plan, with a retry behind it, landed every letter
+inside its band, and the retry never fired once. The field alone did it. That was measured
+on the generation path described below, which is now switched off for unrelated reasons, so
+read it as a finding about instructions versus schemas rather than as something running
+today.
 
 **Some checks only exist at corpus level.** A phrase repeated across letters to different
 companies is invisible to any check that reads one document at a time, because each letter
@@ -126,6 +154,11 @@ purpose. The letters had quietly dropped real evidence: a people-management proo
 a role that explicitly asked for people management. Without the veto written down in
 advance, a three-of-four scorecard is very easy to ship.
 
+The same discipline is what ended the work. The final experiment's criteria, its numeric
+bar and its three possible outcomes, one of which was "abandon", were written and saved
+before the run made a single API call. The result matched the abandon branch, so that is
+what happened.
+
 ## What it doesn't do
 
 No auto-submit, no form filling, no LinkedIn scraping, no aggregator support.
@@ -136,15 +169,37 @@ automated access, and a single unauthenticated request came back classified as a
 Three signals, one answer. `robots.txt` is checked at request time for Oracle HCM, which
 is the newest provider, and not yet for the other six.
 
-Four more, all measured rather than assumed:
+Five more, all measured rather than assumed:
 
-**`plan_then_write` is off by default and may stay that way.** It does fix what it was
-built to fix: proof-point selection now answers to the posting's own stated requirements
-instead of defaulting to whichever two facts sound most impressive. What it doesn't do
-reliably is *deliver* what it selected. Generating the same validated plan twice produced
-one letter that named the management experience the plan committed to and one that never
-mentioned it. Until that's consistent, the default stays on the path whose failure modes
-I already know.
+**`plan_then_write` was built, measured across two experiments, and rejected.** It ships
+behind a config flag that defaults to off, and that is permanent rather than provisional.
+
+It did fix what it was built to fix. Proof-point selection answers to the posting's own
+stated requirements instead of defaulting to whichever facts sound most impressive, and
+across fifteen letters written from three fixed plans, every checkable commitment reached
+the prose in five runs out of five. Coverage became reliable.
+
+Texture did not. Sentence-length variance, the mechanical proxy for prose that reads
+written rather than assembled, came in at 10.81 against a pre-registered bar of 11.61 and a
+freeform baseline of 11.58. The previous experiment scored 10.77 on the same roles. Two
+experiments, no movement.
+
+The run's own data showed why, and it was the thing I'd predicted would go wrong. Splitting
+the fifteen letters by whether the correction loop fired, the letters that went through it
+average 1.05 points lower variance than the letters that did not. The loop that makes the
+commitments land is itself flattening the prose. Even the best case, every letter written
+once with no correction pass at all, averages 11.30 and still misses the bar, so a cleaner
+re-run could not have rescued it.
+
+That is the trade this architecture makes: precision paid for in texture. It's the wrong
+one for prose that gets hand-edited anyway, so the code stays behind its flag, tested and
+reachable, and `freeform` stays the default.
+
+**The commitment check is dormant.** It verifies that a letter delivered the figures its
+own plan committed to, and it only runs on the plan path. The plan path is off. So in the
+default configuration nothing checks whether a letter kept its promises, because in the
+default configuration there is no plan for it to check against. The code is there, it has
+tests, and it does not run.
 
 **The duplication numbers are a floor and a ceiling, not a score.** The exact-overlap
 measure only catches near-verbatim reuse, so it reads low on a paragraph that restates a
@@ -176,7 +231,7 @@ brew install poppler                 # or: apt install poppler-utils
 cp config.yaml.example config.yaml
 cp .env.example .env                 # add your ANTHROPIC_API_KEY
 
-python -m pytest                     # 489 passed, 3 skipped
+python -m pytest                     # 512 passed, 3 skipped
 python app.py                        # http://127.0.0.1:8766
 ```
 

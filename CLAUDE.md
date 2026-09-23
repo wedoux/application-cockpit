@@ -4,9 +4,9 @@ Guidance for Claude Code when working in this repo.
 
 ## Things that are expensive to rediscover
 
-**`style_gate.py` has exactly one implementation and two callers.** The live generation
-path (`app.py`'s `run_fidelity_gates`) and the offline eval harness
-(`cover_letter_experiment.py`) both import it. That is deliberate. Do not fork the
+**`style_gate.py` has exactly one implementation and three callers.** The live generation
+path (`app.py`'s `run_fidelity_gates`) and both offline eval harnesses
+(`cover_letter_experiment.py`, `cover_letter_reliability.py`) import it. That is deliberate. Do not fork the
 patterns into a second copy for the harness, or tune one without the other: two copies
 drift, and then whether a draft is acceptable starts depending on which door the text
 came through. Same reasoning as `staging.py` calling into `gmail_sweep_apply.py` instead
@@ -23,10 +23,30 @@ already owns.
 
 **Cover letters have a mode flag: `cover_letter.mode` in `config.yaml`.** `freeform` is a
 single call from a prose brief. `plan_then_write` is a validated structured plan followed
-by a free-prose write step. `freeform` is the default **on purpose**, not by neglect:
-`plan_then_write` fixes proof-point selection but does not yet reliably carry what it
-selected into the prose (same plan, two runs, one letter dropped the commitment). Do not
-flip the default as a side effect of other work. Both paths stay reachable.
+by a free-prose write step. `freeform` is the default **on purpose**, and after three
+experiments that is a settled decision rather than a pending one.
+
+`plan_then_write` works at what it was built for. Selection became correct and stayed
+correct, and in the final run every checkable commitment reached the prose in 5 of 5 runs
+across three fixed plans. It was rejected on texture: sentence-length variance measured
+10.81 against a pre-registered bar of 11.61 and a freeform baseline of 11.58, unchanged
+from the previous experiment's 10.77. Letters that went through the commitment-retry loop
+averaged 1.05 points lower variance than letters that did not, so the correction loop is
+part of what flattens the prose, and even a retry-free best case (11.30) misses the bar.
+
+Do not flip the default, and do not re-open this without new evidence about texture
+specifically. Both paths stay reachable so the measurement can be reproduced.
+
+**`style_gate.scan_commitment_coverage` only runs on the plan path, so it is currently
+dormant.** Do not describe it in user-facing text as something the tool does. Two
+properties of it were expensive to learn and are pinned by named tests: committed figures
+are read from `cv_source_line` as well as `claim` (in both real failures the digits existed
+only in the source line), and a figure counts as delivered when written out in words. A
+digits-only version scored "a team of eighteen designers" as a dropped commitment and fired
+corrective retries against letters that were already correct. Similarity scoring is
+computed but must never gate: across 12 hand-labelled proof points no text-overlap measure
+separated delivered commitments from dropped ones, and cosine inverted on the clearest
+pair.
 
 **Staging lives outside the repo.** `paths.staging_dir` in the gitignored `config.yaml`
 is what resolves it, and the real one points outside the repository, so a path that looks
