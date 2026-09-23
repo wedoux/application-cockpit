@@ -9,12 +9,11 @@ an invented one). Prose style isn't discrete the same way — a negative-
 parallelism regex will occasionally flag a genuinely earned contrast, an
 em-dash count alone can't tell "sprinkled for punch" from "one deliberate
 aside" — so this starts advisory and stays advisory until the fixture set in
-docs/cover-letter-baseline.md shows a low false-positive rate. Promoting any
+a fixture set shows a low false-positive rate. Promoting any
 one check to a hard block, the way numeric_fact_gate already is, is a later
 decision, not this one.
 
-Findings doc: docs/cover-letter-quality-findings.md, diagnosis §1 and
-intervention 4. The gap this closes: writing-rules.md's rules are loaded
+The gap this closes: writing-rules.md's rules are loaded
 verbatim into the generation system prompt (prompt_assembly.py), but nothing
 downstream ever checks a draft against them — the two existing post-
 generation checks (verifier.verify_fidelity, numeric_fact_gate) both target
@@ -28,7 +27,7 @@ transcribed from that source, not summarised.
 
 Single implementation, two callers: the runtime advisory gate in app.py's
 run_fidelity_gates (lands in critic_notes, same as verify_fidelity's flags)
-and docs/cover-letter-baseline.md's offline scan over every stored letter.
+and the offline scan below, over every stored letter.
 Sharing one module means tuning a regex once fixes both — the two must never
 drift into checking different things for the same rule.
 
@@ -270,7 +269,7 @@ def scan_em_dashes(text):
 # Length. No word-count rule exists anywhere in the generation pipeline
 # today ("one page" in COVER_LETTER_TASK is prose, not enforced) — this is
 # the first mechanical check against it. 300 is a starting ceiling, not a
-# measured one; tune against docs/cover-letter-baseline.md.
+# measured one; tune it against a baseline scan of your own letters.
 # ------------------------------------------------------------------
 
 DEFAULT_WORD_CEILING = 300
@@ -282,7 +281,7 @@ def scan_word_count(text, ceiling=DEFAULT_WORD_CEILING):
 
 
 # ------------------------------------------------------------------
-# CV-duplication proxy (findings doc §2/§3: intervention 2's backstop).
+# CV-duplication proxy: the backstop for threading the tailored CV into
 # Shared 5-gram overlap between the letter and the tailored CV's own
 # content_md, expressed as a percentage of the letter's unique 5-grams.
 # A strict proxy — it catches near-verbatim restatement, not paraphrase-
@@ -678,9 +677,8 @@ def run_style_gate(content_md, cv_text=None, word_ceiling=DEFAULT_WORD_CEILING):
 
 # ------------------------------------------------------------------
 # Row/table helpers — one implementation shared by the baseline scan below
-# and docs/cover-letter-experiment-1.md's before/after script (Task 4 of
-# implementation pass 2), so the two reports are never built from two
-# slightly-different column definitions.
+# and cover_letter_experiment.py's before/after script, so the two reports
+# are never built from two slightly-different column definitions.
 # ------------------------------------------------------------------
 
 BASELINE_COLUMNS = [
@@ -743,9 +741,9 @@ def _latest_cv_text(conn, role_id):
 
 
 if __name__ == "__main__":
-    # Offline baseline scan (findings doc §3): every stored cover letter in
+    # Offline baseline scan: every stored cover letter in
     # cockpit.db, scored with no model call. Prints a markdown table to
-    # stdout — `python3 style_gate.py > docs/cover-letter-baseline.md`
+    # stdout — `python3 style_gate.py > ../cover-letter-baseline.md`
     # regenerates the numbers on record any time a prompt change lands.
     # Real cockpit.db, deliberately: this is a manual, read-only offline
     # tool run directly by a person, not part of the pytest suite (which

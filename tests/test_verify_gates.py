@@ -37,7 +37,7 @@ def _insert_role(company="Acme Corp", title="Head of Design", category="Leadersh
 
 
 def _fake_generate(content_md, master_cv_text="Led a team of 7 designers on a $500k budget."):
-    def _gen(role, doc_type, config=None):
+    def _gen(role, doc_type, config=None, tailored_cv_text=None):
         return {
             "content_md": content_md,
             "content_json": None,
@@ -88,7 +88,7 @@ def test_generate_commits_earlier_doc_types_when_a_later_one_fails_its_gate(monk
     happens to doc types that come after it."""
     role_id = _insert_role()
 
-    def _gen(role, doc_type, config=None):
+    def _gen(role, doc_type, config=None, tailored_cv_text=None):
         content = ("I led a team of 7 designers on a $500k budget." if doc_type == "cv"
                    else "I led a team of 27 designers on a $500k budget.")  # 27 is invented — blocks
         return _fake_generate(content)(role, doc_type, config)
@@ -112,7 +112,7 @@ def test_generate_commits_earlier_doc_types_when_a_later_one_errors(monkeypatch)
     inside the doc_types loop and both used to lose everything before them."""
     role_id = _insert_role()
 
-    def _gen(role, doc_type, config=None):
+    def _gen(role, doc_type, config=None, tailored_cv_text=None):
         if doc_type == "cv":
             return _fake_generate("I led a team of 7 designers on a $500k budget.")(role, doc_type, config)
         raise generation.GenerationError("simulated API failure")
@@ -145,6 +145,93 @@ def test_generate_passes_when_every_number_is_sourced(monkeypatch):
     conn.close()
     notes = json.loads(row["critic_notes"])
     assert notes["numeric_gate"]["blocked"] is False
+
+
+# ------------------------------------------------------------------
+# CV threading — implementation pass 2, Task 2: the cover-letter call must
+# see the tailored CV (this request's own, or the latest stored one), and
+# never the CV generation call itself.
+# ------------------------------------------------------------------
+
+def test_cover_letter_receives_the_cv_generated_earlier_in_the_same_request(monkeypatch):
+    role_id = _insert_role()
+    seen = {}
+
+    def _gen(role, doc_type, config=None, tailored_cv_text=None):
+        seen[doc_type] = tailored_cv_text
+        content = "I led a team of 7 designers on a $500k budget."
+        return _fake_generate(content)(role, doc_type, config)
+
+    monkeypatch.setattr(generation, "generate", _gen)
+    client = app.app.test_client()
+    r = client.post(f"/api/roles/{role_id}/generate", json={"doc_types": ["cv", "cover_letter"]})
+    assert r.status_code == 200
+    assert seen["cv"] is None, "the CV call itself must not receive a tailored-CV text"
+    assert seen["cover_letter"] == "I led a team of 7 designers on a $500k budget.", \
+        "the cover letter call must see the CV generated earlier in this same request"
+
+
+def test_cover_letter_falls_back_to_the_latest_stored_cv_when_none_is_in_this_request(monkeypatch):
+    role_id = _insert_role()
+    conn = dbmod.connect()
+    conn.execute(
+        "INSERT INTO documents (role_id, doc_type, version, format, content_md, model, status, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (role_id, "cv", 1, "md", "An earlier stored CV.", "test-model", "draft", dbmod.now()),
+    )
+    conn.commit()
+    conn.close()
+
+    seen = {}
+
+    def _gen(role, doc_type, config=None, tailored_cv_text=None):
+        seen[doc_type] = tailored_cv_text
+        return _fake_generate("A clean draft with nothing to flag.")(role, doc_type, config)
+
+    monkeypatch.setattr(generation, "generate", _gen)
+    client = app.app.test_client()
+    r = client.post(f"/api/roles/{role_id}/generate", json={"doc_types": ["cover_letter"]})
+    assert r.status_code == 200
+    assert seen["cover_letter"] == "An earlier stored CV."
+
+
+def test_cover_letter_gets_none_when_no_cv_exists_anywhere(monkeypatch):
+    role_id = _insert_role()
+    seen = {}
+
+    def _gen(role, doc_type, config=None, tailored_cv_text=None):
+        seen[doc_type] = tailored_cv_text
+        return _fake_generate("A clean draft with nothing to flag.")(role, doc_type, config)
+
+    monkeypatch.setattr(generation, "generate", _gen)
+    client = app.app.test_client()
+    r = client.post(f"/api/roles/{role_id}/generate", json={"doc_types": ["cover_letter"]})
+    assert r.status_code == 200
+    assert seen["cover_letter"] is None
+
+
+def test_style_gate_duplication_uses_the_threaded_cv_text(monkeypatch):
+    role_id = _insert_role()
+
+    def _gen(role, doc_type, config=None, tailored_cv_text=None):
+        if doc_type == "cv":
+            return _fake_generate("- Led a team of 7 designers on a $500k budget.")(role, doc_type, config)
+        return _fake_generate("I led a team of 7 designers on a $500k budget.")(role, doc_type, config)
+
+    monkeypatch.setattr(generation, "generate", _gen)
+    client = app.app.test_client()
+    r = client.post(f"/api/roles/{role_id}/generate", json={"doc_types": ["cv", "cover_letter"]})
+    assert r.status_code == 200
+
+    conn = dbmod.connect()
+    row = conn.execute(
+        "SELECT critic_notes FROM documents WHERE role_id = ? AND doc_type = 'cover_letter'",
+        (role_id,),
+    ).fetchone()
+    conn.close()
+    notes = json.loads(row["critic_notes"])
+    assert notes["style_gate"]["duplication"] is not None
+    assert notes["style_gate"]["duplication"]["shared_ngrams"] > 0
 
 
 # ------------------------------------------------------------------

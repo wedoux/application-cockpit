@@ -34,6 +34,27 @@ category_cv_map:
   Senior IC:  null
   Review:     null
 
+# Cover letter generation. mode: "freeform" (default — a single freeform
+# prompt) or "plan_then_write" (a structured plan step, validated against
+# the tailored CV, then a free-prose write step with a length-retry loop).
+# word_targets are per category — a Leadership letter may justifiably run
+# longer than a Senior IC one; edit these once you know what fits your own
+# categories.
+cover_letter:
+  mode: freeform
+  word_targets:
+    Leadership: 300
+    Advisory:   300
+    Senior IC:  300
+  word_tolerance_pct: 10
+  # Proof-point count range, per category. A role that genuinely needs a
+  # third distinct point (scale, people-management, and AI work, say)
+  # isn't structurally capped at two; edit per category as needed.
+  proof_points:
+    Leadership: {min: 2, max: 3}
+    Advisory:   {min: 2, max: 3}
+    Senior IC:  {min: 2, max: 3}
+
 # Company -> logo asset (relative to assets/), used by the CV renderer.
 # Optional entirely — an experience entry whose company isn't listed here
 # (or an empty map, like this sample) renders with no logo, not an error.

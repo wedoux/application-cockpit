@@ -372,15 +372,14 @@ def run_fidelity_gates(content_md, *, master_cv_text, master_cv_path, jd_text,
     fidelity["master_cv_file"] = Path(master_cv_path).name
     fidelity["master_cv_sha256"] = hashlib.sha256(master_cv_text.encode("utf-8")).hexdigest()
     fidelity["jd_sha256"] = hashlib.sha256((jd_text or "").encode("utf-8")).hexdigest()
-    # Advisory only: reports into critic_notes next to verify_fidelity's
-    # flags, never blocks. Style is not discrete the way a number is (a
-    # negative-parallelism regex will occasionally flag an earned contrast),
-    # so this reports and a human decides, until a fixture set says the
-    # false-positive rate is low enough to gate on.
-    #
-    # tailored_cv_text has no caller populating it yet, so run_style_gate's
-    # duplication checks are inert at generation time for now; the offline
-    # scan supplies CV text directly when measuring stored letters.
+    # Advisory only — reports into critic_notes
+    # next to verify_fidelity's flags, never blocks. tailored_cv_text (Task 2,
+    # implementation pass 2) makes the duplication checks inside
+    # run_style_gate live at generation time, not just in the offline
+    # baseline scan — the same CV text threaded into the cover-letter
+    # generation call itself is what this scores duplication against, so
+    # the number reflects what the model actually saw, not a stale
+    # fallback.
     fidelity["style_gate"] = style_gate.run_style_gate(content_md, cv_text=tailored_cv_text)
     # Cross-letter phrase repetition (pass 4, Task 4) — advisory, the one
     # check that gets more useful the longer the tool runs, since the
@@ -483,10 +482,21 @@ def api_generate(role_id):
             "block": lang_gate_result["block"],
         }), 422
 
+    # CV-awareness for the cover letter call: the current request's own CV result
+    # takes precedence over a stored one (fresher, and reflects whatever
+    # this exact request just tailored), falling back to the latest stored
+    # CV for this role if "cv" isn't part of this request, and to None if
+    # neither exists — generate() ignores this entirely for doc_type "cv".
+    cv_row = conn.execute(
+        "SELECT content_md FROM documents WHERE role_id = ? AND doc_type = 'cv' "
+        "ORDER BY version DESC LIMIT 1", (role_id,),
+    ).fetchone()
+    tailored_cv_text = cv_row["content_md"] if cv_row else None
+
     results = []
     for dt in doc_types:
         try:
-            gen = generation.generate(role, dt, cfg)
+            gen = generation.generate(role, dt, cfg, tailored_cv_text=tailored_cv_text)
         except pa.AssemblyError as e:
             conn.close()
             return jsonify({"ok": False, "error": "assembly", "message": str(e)}), 400
@@ -508,6 +518,11 @@ def api_generate(role_id):
                                "Top up at console.anthropic.com/settings/billing, then try again.",
                 }), 402
             return jsonify({"ok": False, "error": "generation_failed", "message": msg}), 502
+        if dt == "cv":
+            # A CV generated earlier in this same request is fresher than
+            # whatever was already stored — use it for any cover_letter
+            # still to come in this loop.
+            tailored_cv_text = gen["content_md"]
         version = conn.execute(
             "SELECT COALESCE(MAX(version), 0) + 1 FROM documents "
             "WHERE role_id = ? AND doc_type = ?", (role_id, dt),
@@ -520,6 +535,9 @@ def api_generate(role_id):
             repairs=gen["repairs"],
             language_gate={"verdict": lang_gate_verdict, "overridden": lang_gate_overridden,
                            **lang_gate_result},
+            # Duplication-vs-CV is meaningless for the CV document itself —
+            # only score it for the cover letter.
+            tailored_cv_text=tailored_cv_text if dt == "cover_letter" else None,
             cross_letter_corpus=cross_letter_corpus(conn, role_id) if dt == "cover_letter" else None,
         )
         numeric = fidelity["numeric_gate"]
@@ -696,11 +714,16 @@ def api_document_edit(doc_id):
     profile_text = Path(cfg["paths"]["about_me"]).read_text(encoding="utf-8")
 
     parent_fidelity = json.loads(doc["critic_notes"]) if doc["critic_notes"] else {}
+    cv_row = conn.execute(
+        "SELECT content_md FROM documents WHERE role_id = ? AND doc_type = 'cv' "
+        "ORDER BY version DESC LIMIT 1", (doc["role_id"],),
+    ).fetchone()
     fidelity = run_fidelity_gates(
         content_md,
         master_cv_text=master_cv_text, master_cv_path=master_cv_path,
         jd_text=role["jd_text"], profile_text=profile_text,
         language_gate=parent_fidelity.get("language_gate"),
+        tailored_cv_text=cv_row["content_md"] if cv_row else None,
         # doc["doc_type"] is always "cover_letter" here, checked earlier in
         # this route, so this is never wasted for a CV edit.
         cross_letter_corpus=cross_letter_corpus(conn, doc["role_id"]),

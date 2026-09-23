@@ -11,7 +11,7 @@ the real thing) and one negative fixture (it doesn't fire on ordinary prose
 that happens to contain "not" or "and"). The copula-negation case
 (test_copula_negation_restate_catches_the_missed_linear_sentence) is the
 specific regression this gate exists to close — see style_gate.py's module
-docstring and docs/cover-letter-quality-findings.md §4: a first pass that
+docstring: a first pass that
 only matched the literal word "not" missed "wasn't X, it was Y" entirely,
 because "wasn't" doesn't contain "not" as a word.
 """
@@ -305,7 +305,7 @@ def test_duplication_is_zero_for_genuinely_different_text():
 # scan_duplication's proxy would miss all three), and one closing
 # paragraph. The real calibration — this metric run against the actual
 # letter and CV that motivated it (documents.id 36/35 in cockpit.db,
-# findings doc §diagnosis) — separated its four restated paragraphs
+# separated its four restated paragraphs
 # (0.34-0.52) from its two original ones (0.17-0.20) with a clean gap, and
 # a 0.3 threshold reproduced "four of six paragraphs restate the CV"
 # exactly, independent of the human read that first named that count. That
