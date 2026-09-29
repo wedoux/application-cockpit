@@ -70,11 +70,28 @@ constantly and the answer is knowable before you spend anything.
 ![The language gate blocking generation, quoting the German requirement verbatim from the posting](docs/images/language-gate.png)
 
 **Numeric fact gate.** Every number in a generated draft has to trace back to your master
-CV, the job description, or your profile. One that doesn't is a hard block with the
-unmatched figures listed. Team sizes and percentages are where interview liability
-lives, and a model will invent them politely.
+CV, the job description, or your profile. Team sizes and percentages are where interview
+liability lives, and a model will invent them politely.
+
+What the gate accepts has never been loosened. What changed is what happens when it
+refuses. A number is first checked for forms that mean the same thing — "over 700" against
+a CV that says "700+", "from 0 to 3" against one that says "from zero to a team of 3" —
+which costs nothing and resolves most of it. If a number is still unsourced, only the
+sentences carrying it go back to the model to be corrected or dropped, and the repaired
+draft then faces every gate a fresh one does. Failing that, one regeneration. Failing
+that, the draft is stored as `blocked`: readable, editable, and barred from approval and
+export until its numbers check out. Every equivalence, every rewritten sentence and the
+cost of every attempt is recorded on the document.
+
+That last step exists because the old behaviour discarded the draft, so there was never
+any record of what a blocked one actually said.
 
 ![The numeric fact gate blocking a draft, naming the unmatched number](docs/images/numeric-fact-gate.png)
+
+<!-- The screenshot above still shows the old behaviour: a hard stop at generation with
+     nothing stored. It needs retaking against the current UI — a blocked draft now
+     appears in the documents list with a "blocked" badge and a banner naming the
+     unsourced numbers. Not faked here; it needs a real blocked draft on sample data. -->
 
 **ATS text-layer gate.** Extracts the rendered PDF's text with `pdftotext` and refuses
 the download if the email and phone number aren't in it as literal text, if the reading

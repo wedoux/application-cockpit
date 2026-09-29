@@ -9,11 +9,24 @@ without a human in the loop. Numbers are also where interview liability
 actually lives — team sizes, assets under administration, locations, years —
 which is why this is a hard block and the entity check isn't.
 
-Every numeric token in a generated draft (percentages, currency, magnitude-
-suffixed counts like 700+ or $2T, plain counts, years) is diffed against a
-corpus built from three sources: the master CV used for that generation, the
-job description, and professional-profile.md. Anything not found in the
-corpus BLOCKS — the draft is never stored.
+Every number in a generated draft (percentages, currency, magnitude-suffixed
+counts like 700+ or $2T, plain counts, years, and number words) is diffed
+against a corpus built from three sources: the master CV used for that
+generation, the job description, and professional-profile.md. Anything not
+found in the corpus fails the gate.
+
+This module decides what is sourced. It does NOT decide what happens next.
+Since 2026-09-29 an unmatched number starts a repair ladder rather than
+ending the generation — see numeric_repair.py and the ladder in app.py.
+Two rules of that ladder constrain this file:
+
+  * What the gate accepts never loosens because a repair is available. The
+    rules below (the "N+" understatement rule, the number-word mapping) are
+    equivalences — two ways of writing the same number — not concessions.
+  * A number that passes because of one of those rules says so.
+    check_numeric_facts returns them under "equivalences" and the caller
+    records them on the document, because a gate that quietly starts
+    accepting more than it used to is indistinguishable from a broken one.
 
 Comma-grouping and magnitude-suffix normalization ported, with attribution,
 from career-ops' verify-cv-facts.mjs (normalizeClaim / COUNT_CLAIM_RE — MIT

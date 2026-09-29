@@ -360,10 +360,18 @@ def run_fidelity_gates(content_md, *, master_cv_text, master_cv_path, jd_text,
     version: if the master CV changed since the draft was generated, that's
     a real fact and the new version should say so.
 
-    The numeric fact gate BLOCKS. Every numeric token must trace back to the
-    master CV, the JD, or professional-profile.md. Numbers are discrete — a
-    rephrase can't hide an invented one the way prose can — and they're
-    where interview liability actually lives.
+    The numeric fact gate BLOCKS. Every number must trace back to the master
+    CV, the JD, or professional-profile.md. Numbers are discrete — a rephrase
+    can't hide an invented one the way prose can — and they're where
+    interview liability actually lives.
+
+    This function reports the block; it does not decide what to do about it,
+    and the two callers decide differently. Generation climbs a repair ladder
+    (rungs 2-4 above) and, failing that, stores the draft as 'blocked'. A
+    hand edit is refused outright — the ladder is for model output, not for a
+    number someone typed. Both run THIS function, unchanged, on whatever text
+    they end up with: a repaired draft passes exactly the gates a fresh one
+    does, which is the only reason a repair can be trusted at all.
 
     language_gate is passed through rather than recomputed. It's a function
     of the JD and declared languages, not of this text, so re-running it on
@@ -545,9 +553,17 @@ def _generate_or_error(role, doc_type, cfg, tailored_cv_text):
 
 
 def numeric_block_payload(numeric, doc_type):
-    """The refusal, worded once. An edit blocked by the numeric gate has to
-    say the same thing generation says, or the two paths teach different
-    lessons about the same rule."""
+    """The refusal, worded once.
+
+    Now used only by the edit path. Generation stopped returning this in
+    2026-09-29's repair-ladder pass: a blocked draft is stored as 'blocked'
+    and reported in the normal documents payload, because discarding it was
+    what left no record of what a blocked draft actually said.
+
+    It stays shared rather than being inlined into the edit route, because
+    the wording is the part that has to agree. Both paths enforce one rule
+    and must teach one lesson about it — only the recovery differs, and the
+    edit path deliberately has none."""
     return {
         "ok": False, "error": "numeric_fact_gate",
         "message": "Blocked: number(s) in the draft don't trace back to the "
