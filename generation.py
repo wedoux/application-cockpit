@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 
 import cover_letter_schema
 import cv_schema
+import numeric_repair
 import prompt_assembly as pa
 import style_gate
 
@@ -445,6 +446,45 @@ def _generate_cover_letter_plan_then_write(client, role, config, system, tailore
         # write step was told exactly what it left out and left it out again.
         "commitment_missed": bool(coverage and coverage["misses"]),
     }
+
+
+def repair_numbers(spans, lines, unmatched, doc_type, model, system):
+    """Rung 2 of the numeric repair ladder: one small call that rewrites
+    only the flagged spans.
+
+    Returns (rewrites, usage, cost). The caller splices the rewrites in and
+    re-runs every gate on the result — this function decides nothing about
+    whether the repair is acceptable, it only produces candidate text.
+
+    Deliberately NOT a regeneration. The expensive part of drafting is the
+    master CV and JD in the prompt; this sends the flagged sentences and the
+    number-bearing source lines and nothing else, so a two-sentence fix
+    costs a fraction of the draft it is fixing. The system prompt is the
+    same text the draft was written against, which keeps the cached block a
+    cache hit rather than a fresh write."""
+    user = numeric_repair.build_repair_prompt(spans, lines, unmatched, doc_type)
+    resp = client_factory().messages.create(
+        model=model,
+        max_tokens=MAX_TOKENS,
+        thinking={"type": "disabled"},
+        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        tools=[numeric_repair.REPAIR_TOOL],
+        tool_choice={"type": "tool", "name": numeric_repair.REPAIR_TOOL_NAME},
+        messages=[{"role": "user", "content": user}],
+    )
+    if resp.stop_reason == "refusal":
+        raise GenerationError("model refused to repair this draft")
+    payload = _extract_tool_input(resp) or {}
+    rewrites = [r for r in payload.get("spans", [])
+                if isinstance(r, dict) and "id" in r and isinstance(r.get("text"), str)]
+    return rewrites, _usage_dict(resp.usage), _cost(model, resp.usage)
+
+
+def client_factory():
+    """Indirection so a test can hand the repair path a fake client without
+    reaching into the Anthropic SDK. generate() builds its own client the
+    same way it always has."""
+    return anthropic.Anthropic()
 
 
 def _cv_tool_call(client, model, system, user_content):

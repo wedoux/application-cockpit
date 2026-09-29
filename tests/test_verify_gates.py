@@ -58,7 +58,13 @@ def _fake_generate(content_md, master_cv_text="Led a team of 7 designers on a $5
 # Numeric fact gate — /api/roles/<id>/generate
 # ------------------------------------------------------------------
 
-def test_generate_blocks_on_an_unsourced_number(monkeypatch):
+def test_generate_stores_a_blocked_draft_rather_than_discarding_it(monkeypatch):
+    """Rung 4, 29 Sep 2026. This used to be "a blocked draft must never be
+    stored", and that is what left no record of what a blocked draft said.
+    The bar has not moved — the numbers are still unsourced and the document
+    is still unusable — but it is now readable and hand-fixable rather than
+    gone. The guarantees moved to the two places that matter: it cannot be
+    exported, and it cannot be picked up as the tailored CV."""
     role_id = _insert_role()
     monkeypatch.setattr(
         generation, "generate",
@@ -66,16 +72,36 @@ def test_generate_blocks_on_an_unsourced_number(monkeypatch):
     )
     client = app.app.test_client()
     r = client.post(f"/api/roles/{role_id}/generate", json={"doc_types": ["cover_letter"]})
-    assert r.status_code == 422
-    data = r.get_json()
-    assert data["ok"] is False
-    assert data["error"] == "numeric_fact_gate"
-    assert "27" in data["unmatched"]
+    assert r.status_code == 200
+    doc = r.get_json()["documents"][0]
+    assert doc["status"] == "blocked"
+    assert "27" in doc["unmatched_numbers"]
 
     conn = dbmod.connect()
-    n = conn.execute("SELECT COUNT(*) FROM documents WHERE role_id = ?", (role_id,)).fetchone()[0]
+    row = conn.execute(
+        "SELECT status, content_md, critic_notes FROM documents WHERE role_id = ?",
+        (role_id,)).fetchone()
     conn.close()
-    assert n == 0, "a blocked draft must never be stored"
+    assert row["status"] == "blocked"
+    assert "27 designers" in row["content_md"], "the draft itself must be recoverable"
+    notes = json.loads(row["critic_notes"])
+    assert notes["numeric_gate"]["unmatched"] == ["27"]
+    assert notes["numeric_attempts"][-1]["action"] == "store_blocked"
+
+
+def test_a_blocked_draft_is_not_exportable(monkeypatch):
+    role_id = _insert_role()
+    monkeypatch.setattr(
+        generation, "generate",
+        _fake_generate("I led a team of 27 designers on a $500k budget."))
+    client = app.app.test_client()
+    doc_id = client.post(f"/api/roles/{role_id}/generate",
+                         json={"doc_types": ["cover_letter"]}).get_json()["documents"][0]["id"]
+
+    r = client.get(f"/api/documents/{doc_id}/download")
+    assert r.status_code == 409
+    assert r.get_json()["error"] == "blocked_document"
+    assert client.post(f"/api/documents/{doc_id}/approve").status_code == 409
 
 
 def test_generate_commits_earlier_doc_types_when_a_later_one_fails_its_gate(monkeypatch):
@@ -96,14 +122,17 @@ def test_generate_commits_earlier_doc_types_when_a_later_one_fails_its_gate(monk
     monkeypatch.setattr(generation, "generate", _gen)
     client = app.app.test_client()
     r = client.post(f"/api/roles/{role_id}/generate", json={"doc_types": ["cv", "cover_letter"]})
-    assert r.status_code == 422
-    assert r.get_json()["doc_type"] == "cover_letter"
+    assert r.status_code == 200
 
     conn = dbmod.connect()
-    rows = conn.execute("SELECT doc_type FROM documents WHERE role_id = ?", (role_id,)).fetchall()
+    rows = conn.execute(
+        "SELECT doc_type, status FROM documents WHERE role_id = ?", (role_id,)).fetchall()
     conn.close()
-    assert {row["doc_type"] for row in rows} == {"cv"}, \
-        "the cv generated before the gate failure must still be stored"
+    by_type = {row["doc_type"]: row["status"] for row in rows}
+    assert by_type["cv"] == "draft", \
+        "the cv that cleared its own gates must still be stored, and usable"
+    assert by_type["cover_letter"] == "blocked", \
+        "the letter that never cleared the numeric gate is stored, but blocked"
 
 
 def test_generate_commits_earlier_doc_types_when_a_later_one_errors(monkeypatch):

@@ -256,6 +256,15 @@
   .doc .badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); }
   .doc .badge.approved { color: var(--offer); border-color: var(--offer-border); }
   .doc .badge.draft { color: var(--sourced); border-color: var(--sourced-border); }
+  .doc .badge.blocked { color: var(--rejected); border-color: var(--rejected-border); }
+  /* A blocked draft is readable and fixable, and nothing else. The banner
+     says which numbers are unsourced, because the whole reason the draft is
+     kept now is that it used to vanish without telling you what it said. */
+  #viewerBlocked { display: none; margin-bottom: 12px; padding: 11px 14px;
+                   border: 1px solid var(--rejected-border); border-left-width: 3px;
+                   border-radius: var(--radius-md, 8px); background: var(--warn-bg, #FEF2F2);
+                   color: var(--warn-text); font-size: 12.5px; line-height: 1.55; }
+  #viewerBlocked strong { font-variant-numeric: tabular-nums; }
   .doc .badge.lang-block { color: var(--rejected); border-color: var(--rejected-border); }
   .doc .badge.lang-warn { color: var(--sourced); border-color: var(--sourced-border); }
   #viewerLangGate.lang-block { color: var(--rejected); }
@@ -560,6 +569,7 @@
         <button class="btn primary" id="viewerEditSave">Save as new version</button>
         <button class="btn primary" id="viewerDownloadBtn">Download PDF</button>
       </div>
+      <div id="viewerBlocked"></div>
       <div class="muted" id="viewerNote"></div>
       <iframe id="viewerFrame"></iframe>
       <pre id="viewerText"></pre>
@@ -1269,6 +1279,7 @@ function closeViewer(){
   $("#viewerText").style.display="none";
   $("#viewerEdit").style.display="none";
   $("#viewerEditErr").style.display="none";
+  $("#viewerBlocked").style.display="none";
   viewerState = null;
 }
 
@@ -1328,8 +1339,28 @@ function renderViewer(){
     apBtn.style.display="none";
   }
 
+  // Rung 4: the draft is kept so it can be read and hand-fixed, and that is
+  // all it can be. Export is refused server-side too — this just stops the
+  // button pretending otherwise.
+  const blockedBox = $("#viewerBlocked");
+  const blockedNums = (doc.status === "blocked" && fidelity && fidelity.numeric_gate)
+    ? (fidelity.numeric_gate.unmatched || []) : [];
+  if(doc.status === "blocked"){
+    blockedBox.style.display = "block";
+    blockedBox.innerHTML =
+      `This draft is <strong>blocked</strong>. `
+      + (blockedNums.length
+          ? `These number(s) don't trace back to the master CV, the JD or `
+            + `professional-profile.md: <strong>${blockedNums.map(esc).join(", ")}</strong>. `
+          : "")
+      + `It was kept so you can read and fix it — use Edit, which re-runs the `
+      + `same gate. It can't be approved or exported until it passes.`;
+  } else {
+    blockedBox.style.display = "none";
+  }
+
   const dlBtn=$("#viewerDownloadBtn"), note=$("#viewerNote");
-  if(editing){
+  if(editing || doc.status === "blocked"){
     dlBtn.style.display="none";
     note.style.display="none";
   } else if(legacyCv){
@@ -1427,8 +1458,32 @@ function fidelityDetailText(fidelity){
   let out = "\n\n---\nSOURCE-FIDELITY CHECK (advisory, does not block approval)\n";
   if(fidelity.master_cv_file) out += `  sourced from: ${fidelity.master_cv_file} (sha256 ${fidelity.master_cv_sha256.slice(0,12)}…)\n`;
   if(hasRepairs){
-    out += `  ⚠ auto-repaired ${fidelity.repairs.length} field(s). Model returned a malformed shape, recovered deterministically:\n`;
-    out += fidelity.repairs.map(r=>`      [${r.shape}] ${r.field}: recovered ${r.recovered} item(s)`).join("\n") + "\n";
+    // Three kinds now share this list, and they are different events. A
+    // schema repair recovered a malformed shape; a numeric equivalence let a
+    // number through because two spellings are the same number; a numeric
+    // rewrite changed the draft's own words. The last one is the only one
+    // that altered what the letter says, so it shows before and after.
+    const schema = fidelity.repairs.filter(r=>!r.kind);
+    const equiv  = fidelity.repairs.filter(r=>r.kind==="numeric-equivalence");
+    const rewrit = fidelity.repairs.filter(r=>r.kind==="numeric-rewrite");
+    if(schema.length){
+      out += `  ⚠ auto-repaired ${schema.length} field(s). Model returned a malformed shape, recovered deterministically:\n`;
+      out += schema.map(r=>`      [${r.shape}] ${r.field}: recovered ${r.recovered} item(s)`).join("\n") + "\n";
+    }
+    if(equiv.length){
+      out += `  ${equiv.length} number(s) accepted as the same figure written differently:\n`;
+      out += equiv.map(r=>`      "${r.draft}" kept (source says "${r.source}")`).join("\n") + "\n";
+    }
+    if(rewrit.length){
+      out += `  ✎ ${rewrit.length} sentence(s) rewritten to source their numbers:\n`;
+      out += rewrit.map(r=>`      before: ${r.before}\n      after:  ${r.after}`).join("\n") + "\n";
+    }
+  }
+  const attempts = fidelity && fidelity.numeric_attempts;
+  if(attempts && attempts.length > 1){
+    const cost = attempts.reduce((t,a)=>t+(a.cost_usd||0), 0);
+    out += `  numeric repair ladder: ${attempts.map(a=>a.action).join(" → ")}`
+         + (cost ? ` ($${cost.toFixed(4)})` : "") + "\n";
   }
   if(fidelity.flags.length) out += fidelity.flags.map(f=>`  [${f.kind}] not found in master CV: ${f.text}`).join("\n") + "\n";
   if(fidelity.gaps.length) out += fidelity.gaps.map(g=>`  ${g}`).join("\n") + "\n";

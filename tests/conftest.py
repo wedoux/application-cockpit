@@ -20,6 +20,7 @@ import pytest
 
 import app as app_module
 import db as dbmod
+import generation
 
 # Captured once, at collection time, before any fixture has had a chance to
 # monkeypatch db.DB_PATH — this is the one true path to protect.
@@ -67,3 +68,34 @@ def isolated_backup_dir(tmp_path, monkeypatch):
     the DB itself, so a test that triggers a bulk-mutation path never writes
     into the real backups/ folder or prunes a real snapshot."""
     monkeypatch.setattr(dbmod, "BACKUP_DIR", tmp_path / "backups")
+
+
+class RealApiCallError(RuntimeError):
+    """Raised when a test reaches for a live Anthropic client. Same shape and
+    same reasoning as RealDatabaseAccessError: a plain exception rather than
+    pytest.fail(), so the guard itself is directly testable."""
+
+
+@pytest.fixture(autouse=True)
+def no_live_api_calls(monkeypatch):
+    """No test may build a real Anthropic client.
+
+    Until the numeric repair ladder there was one door to the API —
+    generation.generate — and every test that needed it monkeypatched that
+    one function, so nothing had to enforce this. The repair rung added a
+    second door (generation.repair_numbers), and a test that forgot to patch
+    it would have sent draft text to the API and been charged for it
+    silently, because the ladder catches a failed repair and climbs rather
+    than raising.
+
+    A test that wants the repair path overrides generation.client_factory
+    with its own fake, which is a deliberate act rather than an omission.
+    """
+    def guarded():
+        raise RealApiCallError(
+            "A test tried to build a live Anthropic client. Patch "
+            "generation.generate, or generation.client_factory for the "
+            "repair path, with a fake instead."
+        )
+
+    monkeypatch.setattr(generation, "client_factory", guarded)

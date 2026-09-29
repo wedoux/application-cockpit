@@ -29,7 +29,9 @@ import db as dbmod
 import generation
 import jd_fetch
 import language_gate
+import cv_schema
 import numeric_fact_gate as ng
+import numeric_repair
 import pdf_export
 import prompt_assembly as pa
 import staging
@@ -414,6 +416,134 @@ def cross_letter_corpus(conn, exclude_role_id):
     return {row["id"]: row["content_md"] for row in rows}
 
 
+# ---------------------------------------------------------------------------
+# The numeric repair ladder
+# ---------------------------------------------------------------------------
+# One unmatched number used to end the whole generation: a full draft paid
+# for, nothing stored, and no record of what the draft said. Regenerating was
+# the only recourse and it is a gamble, because a fresh draft rewords
+# different numbers — on 29 Sep a retry fixed 700 and broke on 35.
+#
+# So: try the cheapest fix first, and only climb if it fails.
+#   Rung 1  deterministic equivalence, inside numeric_fact_gate. Free.
+#   Rung 2  rewrite only the flagged sentences. One small call.
+#   Rung 3  one full regeneration, which goes through rungs 1 and 2 again.
+#   Rung 4  store the draft as 'blocked' so it can be read and hand-fixed.
+#
+# The bar never moves. Every rung produces candidate text and nothing more;
+# run_fidelity_gates decides whether it is acceptable, on the spliced result,
+# exactly as it would for a fresh draft.
+NUMERIC_REPAIRS_PER_DRAFT = 1
+NUMERIC_REGENERATIONS_PER_DOCUMENT = 1
+
+
+def _numeric_equivalence_repairs(fidelity):
+    """Rung-1 equivalences as entries for critic_notes' repairs list.
+    Nothing is fixed invisibly: a number that passed only because "zero" and
+    "0" are the same number says so on the document."""
+    return [{"kind": "numeric-equivalence", **eq}
+            for eq in fidelity["numeric_gate"].get("equivalences", [])]
+
+
+def _repair_once(gen, fidelity, *, doc_type, role, cfg, profile_text, gate_kwargs, attempts):
+    """Rung 2. Returns (gen, fidelity) on a repair that clears every gate,
+    or (None, None) — a failed repair leaves the draft exactly as it was.
+
+    A repair that fixes the number but trips something else is a failed
+    repair, not a partial win: the draft is re-checked in full, and new
+    fidelity flags or gaps count against it. Otherwise "repair" would mean
+    "trade a caught problem for an uncaught one"."""
+    unmatched = fidelity["numeric_gate"]["unmatched"]
+    is_cv_json = doc_type == "cv" and gen.get("content_json")
+    spans = (numeric_repair.flagged_json_fields(gen["content_json"], unmatched)
+             if is_cv_json
+             else numeric_repair.flagged_sentences(gen["content_md"], unmatched))
+    if not spans:
+        # The numbers are somewhere no span selector reached. Nothing to
+        # send, so nothing to repair — climb.
+        attempts.append({"rung": 2, "action": "repair", "outcome": "no_spans",
+                         "unmatched": unmatched})
+        return None, None
+
+    lines = numeric_repair.source_lines(gen["master_cv_text"], role["jd_text"], profile_text)
+    system = pa.build_system_prompt(cfg, gen["master_cv_text"], category=role.get("category"))
+    try:
+        rewrites, usage, cost = generation.repair_numbers(
+            spans, lines, unmatched, doc_type, cfg["model"], system)
+    except Exception as exc:  # noqa: BLE001 — a failed repair is a rung, not a 500
+        attempts.append({"rung": 2, "action": "repair", "outcome": "error", "error": str(exc)})
+        return None, None
+
+    attempt = {"rung": 2, "action": "repair", "unmatched": unmatched,
+               "spans": len(spans), "usage": usage, "cost_usd": cost}
+    attempts.append(attempt)
+    if not rewrites:
+        attempt["outcome"] = "no_rewrites"
+        return None, None
+
+    candidate = dict(gen)
+    if is_cv_json:
+        patched = numeric_repair.splice_json_fields(gen["content_json"], spans, rewrites)
+        candidate["content_json"] = patched
+        # The markdown is DERIVED from the JSON. Patch the JSON and
+        # re-render; never patch the render, which the next render would
+        # overwrite and which would leave content_json disagreeing with the
+        # document it supposedly describes.
+        candidate["content_md"] = cv_schema.cv_json_to_markdown(patched)
+    else:
+        candidate["content_md"] = numeric_repair.splice_sentences(
+            gen["content_md"], spans, rewrites)
+
+    candidate_fidelity = run_fidelity_gates(candidate["content_md"], **gate_kwargs)
+    if candidate_fidelity["numeric_gate"]["blocked"]:
+        attempt["outcome"] = "still_unmatched"
+        attempt["remaining"] = candidate_fidelity["numeric_gate"]["unmatched"]
+        return None, None
+    if (len(candidate_fidelity["flags"]) > len(fidelity["flags"])
+            or len(candidate_fidelity["gaps"]) > len(fidelity["gaps"])):
+        attempt["outcome"] = "broke_another_gate"
+        return None, None
+
+    attempt["outcome"] = "repaired"
+    by_id = {r["id"]: r["text"] for r in rewrites}
+    candidate_fidelity["repairs"] = list(fidelity.get("repairs", [])) + [
+        {"kind": "numeric-rewrite", "before": span["text"], "after": by_id[span["id"]]}
+        for span in spans if span["id"] in by_id and by_id[span["id"]].strip() != span["text"].strip()
+    ]
+    return candidate, candidate_fidelity
+
+
+def _generate_or_error(role, doc_type, cfg, tailored_cv_text):
+    """One draft, or the HTTP error it failed with. Returns (gen, None) or
+    (None, (response, code)).
+
+    Factored out because rung 3 regenerates, and a regeneration has to
+    handle an out-of-credits or refused call exactly as the first draft
+    does rather than falling through into the ladder with no draft."""
+    try:
+        return generation.generate(role, doc_type, cfg,
+                                   tailored_cv_text=tailored_cv_text), None
+    except pa.AssemblyError as e:
+        return None, (jsonify({"ok": False, "error": "assembly", "message": str(e)}), 400)
+    except Exception as e:  # noqa: BLE001 — surface the API error to the UI
+        msg = str(e)
+        # Anthropic doesn't raise a distinct exception type for this —
+        # it's a BadRequestError like any other 400, but always carries
+        # this exact phrase (documented API behavior, not inferred), so
+        # it's the only reliable way to tell "out of credits" apart from
+        # every other reason a request can fail. Worth a clear, specific
+        # message: the generic "generation_failed" 502 buried the real
+        # cause behind an SDK exception string a user has no reason to
+        # recognize as "go add credits," not e.g. a JD/prompt problem.
+        if "credit balance" in msg.lower():
+            return None, (jsonify({
+                "ok": False, "error": "insufficient_credits",
+                "message": "Your Anthropic API credit balance is too low to generate. "
+                           "Top up at console.anthropic.com/settings/billing, then try again.",
+            }), 402)
+        return None, (jsonify({"ok": False, "error": "generation_failed", "message": msg}), 502)
+
+
 def numeric_block_payload(numeric, doc_type):
     """The refusal, worded once. An edit blocked by the numeric gate has to
     say the same thing generation says, or the two paths teach different
@@ -488,58 +618,101 @@ def api_generate(role_id):
     # CV for this role if "cv" isn't part of this request, and to None if
     # neither exists — generate() ignores this entirely for doc_type "cv".
     cv_row = conn.execute(
+        # status != 'blocked': a CV whose numbers never cleared the gate is
+        # not a CV a cover letter may build on. It is stored so it can be
+        # read and fixed, not so it can be used.
         "SELECT content_md FROM documents WHERE role_id = ? AND doc_type = 'cv' "
-        "ORDER BY version DESC LIMIT 1", (role_id,),
+        "AND status != 'blocked' ORDER BY version DESC LIMIT 1", (role_id,),
     ).fetchone()
     tailored_cv_text = cv_row["content_md"] if cv_row else None
 
     results = []
     for dt in doc_types:
-        try:
-            gen = generation.generate(role, dt, cfg, tailored_cv_text=tailored_cv_text)
-        except pa.AssemblyError as e:
+        attempts = []
+        gen, err = _generate_or_error(role, dt, cfg, tailored_cv_text)
+        if err:
             conn.close()
-            return jsonify({"ok": False, "error": "assembly", "message": str(e)}), 400
-        except Exception as e:  # noqa: BLE001 — surface the API error to the UI
-            conn.close()
-            msg = str(e)
-            # Anthropic doesn't raise a distinct exception type for this —
-            # it's a BadRequestError like any other 400, but always carries
-            # this exact phrase (documented API behavior, not inferred), so
-            # it's the only reliable way to tell "out of credits" apart from
-            # every other reason a request can fail. Worth a clear, specific
-            # message: the generic "generation_failed" 502 buried the real
-            # cause behind an SDK exception string a user has no reason to
-            # recognize as "go add credits," not e.g. a JD/prompt problem.
-            if "credit balance" in msg.lower():
-                return jsonify({
-                    "ok": False, "error": "insufficient_credits",
-                    "message": "Your Anthropic API credit balance is too low to generate. "
-                               "Top up at console.anthropic.com/settings/billing, then try again.",
-                }), 402
-            return jsonify({"ok": False, "error": "generation_failed", "message": msg}), 502
+            return err
+        attempts.append({"rung": 1, "action": "generate",
+                         "usage": gen["usage"], "cost_usd": gen["cost_usd"]})
+        cv_text_before = tailored_cv_text
         if dt == "cv":
             # A CV generated earlier in this same request is fresher than
             # whatever was already stored — use it for any cover_letter
             # still to come in this loop.
             tailored_cv_text = gen["content_md"]
+
+        def _gate_kwargs(g):
+            return dict(
+                master_cv_text=g["master_cv_text"], master_cv_path=g["master_cv_path"],
+                jd_text=role["jd_text"], profile_text=profile_text,
+                repairs=g["repairs"],
+                language_gate={"verdict": lang_gate_verdict,
+                               "overridden": lang_gate_overridden, **lang_gate_result},
+                # Duplication-vs-CV is meaningless for the CV document itself —
+                # only score it for the cover letter.
+                tailored_cv_text=tailored_cv_text if dt == "cover_letter" else None,
+                cross_letter_corpus=(cross_letter_corpus(conn, role_id)
+                                     if dt == "cover_letter" else None),
+            )
+
+        gate_kwargs = _gate_kwargs(gen)
+        fidelity = run_fidelity_gates(gen["content_md"], **gate_kwargs)
+        fidelity["repairs"] += _numeric_equivalence_repairs(fidelity)
+
+        # Rung 2 — repair only the flagged sentences.
+        if fidelity["numeric_gate"]["blocked"]:
+            fixed, fixed_fidelity = _repair_once(
+                gen, fidelity, doc_type=dt, role=role, cfg=cfg,
+                profile_text=profile_text, gate_kwargs=gate_kwargs, attempts=attempts)
+            if fixed:
+                gen, fidelity = fixed, fixed_fidelity
+                if dt == "cv":
+                    tailored_cv_text = gen["content_md"]
+
+        # Rung 3 — one full regeneration, which gets rungs 1 and 2 again.
+        # It does not recurse: there is no second regeneration.
+        if fidelity["numeric_gate"]["blocked"]:
+            regen, regen_err = _generate_or_error(role, dt, cfg, cv_text_before)
+            if regen_err is None:
+                attempts.append({"rung": 3, "action": "regenerate",
+                                 "usage": regen["usage"], "cost_usd": regen["cost_usd"]})
+                gen = regen
+                if dt == "cv":
+                    tailored_cv_text = gen["content_md"]
+                gate_kwargs = _gate_kwargs(gen)
+                fidelity = run_fidelity_gates(gen["content_md"], **gate_kwargs)
+                fidelity["repairs"] += _numeric_equivalence_repairs(fidelity)
+                if fidelity["numeric_gate"]["blocked"]:
+                    fixed, fixed_fidelity = _repair_once(
+                        gen, fidelity, doc_type=dt, role=role, cfg=cfg,
+                        profile_text=profile_text, gate_kwargs=gate_kwargs,
+                        attempts=attempts)
+                    if fixed:
+                        gen, fidelity = fixed, fixed_fidelity
+                        if dt == "cv":
+                            tailored_cv_text = gen["content_md"]
+
+        # Rung 4 — stop, but keep the draft. Discarding it was why there was
+        # never any record of what a blocked draft actually said.
+        numeric = fidelity["numeric_gate"]
+        status = "blocked" if numeric["blocked"] else "draft"
+        if numeric["blocked"]:
+            attempts.append({"rung": 4, "action": "store_blocked",
+                             "unmatched": numeric["unmatched"]})
+            print(f"[generate] role {role_id} {dt} STORED BLOCKED after "
+                  f"{len(attempts)} attempt(s): {numeric['unmatched']}")
+            if dt == "cv":
+                # A blocked CV is not a CV. Anything later in this request
+                # falls back to what was there before it.
+                tailored_cv_text = cv_text_before
+        fidelity["numeric_attempts"] = attempts
+
         version = conn.execute(
             "SELECT COALESCE(MAX(version), 0) + 1 FROM documents "
             "WHERE role_id = ? AND doc_type = ?", (role_id, dt),
         ).fetchone()[0]
 
-        fidelity = run_fidelity_gates(
-            gen["content_md"],
-            master_cv_text=gen["master_cv_text"], master_cv_path=gen["master_cv_path"],
-            jd_text=role["jd_text"], profile_text=profile_text,
-            repairs=gen["repairs"],
-            language_gate={"verdict": lang_gate_verdict, "overridden": lang_gate_overridden,
-                           **lang_gate_result},
-            # Duplication-vs-CV is meaningless for the CV document itself —
-            # only score it for the cover letter.
-            tailored_cv_text=tailored_cv_text if dt == "cover_letter" else None,
-            cross_letter_corpus=cross_letter_corpus(conn, role_id) if dt == "cover_letter" else None,
-        )
         # Commitment coverage is computed inside generation, where the plan
         # exists; it rides into critic_notes with the other advisory checks
         # rather than being recomputed here, which couldn't be done anyway
@@ -550,13 +723,6 @@ def api_generate(role_id):
             fidelity["commitment_coverage"] = gen["commitment_coverage"]
             fidelity["commitment_retried"] = gen.get("coverage_retried", False)
 
-        numeric = fidelity["numeric_gate"]
-        if numeric["blocked"]:
-            conn.close()
-            print(f"[generate] role {role_id} {dt} BLOCKED by numeric fact gate: "
-                  f"{numeric['unmatched']}")
-            return jsonify(numeric_block_payload(numeric, dt)), 422
-
         critic_notes = json.dumps(fidelity)
         content_json = json.dumps(gen["content_json"]) if gen["content_json"] is not None else None
 
@@ -566,7 +732,7 @@ def api_generate(role_id):
                 model, critic_notes, status, created_at
             ) VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (role_id, dt, version, "md", gen["content_md"], content_json,
-             gen["model"], critic_notes, "draft", dbmod.now()),
+             gen["model"], critic_notes, status, dbmod.now()),
         )
         # Commit per document, not once at the end of the doc_types loop. A
         # later doc type in the same request can still fail (generation error,
@@ -589,8 +755,10 @@ def api_generate(role_id):
             "model": gen["model"], "cost_usd": gen["cost_usd"],
             "usage": u, "truncated": gen["truncated"], "retried": gen["retried"],
             "fidelity_flags": len(fidelity["flags"]), "gaps": len(fidelity["gaps"]),
-            "repairs": len(gen["repairs"]), "language_gate_verdict": lang_gate_verdict,
+            "repairs": len(fidelity["repairs"]), "language_gate_verdict": lang_gate_verdict,
             "language_gate_overridden": lang_gate_overridden,
+            "status": status, "unmatched_numbers": numeric["unmatched"],
+            "numeric_attempts": len(attempts),
         })
 
     conn.close()
@@ -726,7 +894,7 @@ def api_document_edit(doc_id):
     parent_fidelity = json.loads(doc["critic_notes"]) if doc["critic_notes"] else {}
     cv_row = conn.execute(
         "SELECT content_md FROM documents WHERE role_id = ? AND doc_type = 'cv' "
-        "ORDER BY version DESC LIMIT 1", (doc["role_id"],),
+        "AND status != 'blocked' ORDER BY version DESC LIMIT 1", (doc["role_id"],),
     ).fetchone()
     fidelity = run_fidelity_gates(
         content_md,
@@ -821,6 +989,17 @@ def api_document_download(doc_id):
     if not row:
         conn.close()
         return jsonify({"ok": False, "error": "not found"}), 404
+    if row["status"] == "blocked":
+        # Rung 4 keeps a blocked draft so it can be read and hand-fixed. A
+        # PDF is the one thing that leaves this machine, so it is the one
+        # thing a draft with unsourced numbers must never become.
+        conn.close()
+        return jsonify({
+            "ok": False, "error": "blocked_document",
+            "message": "This draft is blocked: number(s) in it don't trace back to "
+                       "the master CV, the JD, or professional-profile.md. Fix them "
+                       "in the editor first.",
+        }), 409
 
     existing = row["file_path"]
     if existing and Path(existing).exists():
@@ -902,12 +1081,24 @@ def api_document_download(doc_id):
 @app.post("/api/documents/<int:doc_id>/approve")
 def api_approve(doc_id):
     conn = dbmod.connect()
-    cur = conn.execute("UPDATE documents SET status = 'approved' WHERE id = ?", (doc_id,))
-    conn.commit()
-    found = cur.rowcount
-    conn.close()
-    if not found:
+    row = conn.execute("SELECT status FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    if not row:
+        conn.close()
         return jsonify({"ok": False, "error": "not found"}), 404
+    if row["status"] == "blocked":
+        # Approving a blocked draft would make it exportable through the
+        # front door, which is the whole thing rung 4 exists to prevent.
+        # Said as its own refusal rather than a 404, which would claim the
+        # document isn't there when it demonstrably is.
+        conn.close()
+        return jsonify({
+            "ok": False, "error": "blocked_document",
+            "message": "This draft is blocked on unsourced numbers. Fix them in the "
+                       "editor first — the edit path re-runs the same gate.",
+        }), 409
+    conn.execute("UPDATE documents SET status = 'approved' WHERE id = ?", (doc_id,))
+    conn.commit()
+    conn.close()
     return jsonify({"ok": True})
 
 
