@@ -52,6 +52,76 @@ _NUMERIC_TOKEN_RE = re.compile(
 )
 
 
+# ---------------------------------------------------------------------------
+# Number words (rung 1 of the repair ladder)
+# ---------------------------------------------------------------------------
+# A draft that writes "from 0 to 3" against a CV that says "from zero to a
+# team of 3" was blocking on 0, and a draft that writes "seven products" was
+# never checked at all. Both are the same missing rule: a number word is a
+# number. Mapping them on BOTH sides closes the false positive and the hole
+# together.
+_NUMBER_WORDS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+    "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
+    "seventy": 70, "eighty": 80, "ninety": 90, "hundred": 100,
+}
+_UNIT_WORDS = [w for w, v in _NUMBER_WORDS.items() if 1 <= v <= 9]
+_TENS_WORDS = [w for w, v in _NUMBER_WORDS.items() if v in (20, 30, 40, 50, 60, 70, 80, 90)]
+
+# Longest alternatives first so "seventeen" is never matched as "seven".
+_WORD_ALT = "|".join(sorted(_NUMBER_WORDS, key=len, reverse=True))
+_UNIT_ALT = "|".join(sorted(_UNIT_WORDS, key=len, reverse=True))
+_TENS_ALT = "|".join(sorted(_TENS_WORDS, key=len, reverse=True))
+
+# Compounds are matched whole. Without this, "twenty-five designers" would
+# emit 20 and 5 — two numbers the corpus has never heard of — and block a
+# draft that was correct, which is the exact failure this pass exists to
+# stop. Only two-part compounds are handled ("N hundred", "tens-units");
+# anything longer ("seven hundred and fifty") is left alone rather than
+# half-read, which is what the "and" exclusion below is for.
+_NUMBER_WORD_RE = re.compile(
+    rf"(?<![\w-])(?:(?:{_UNIT_ALT})[-\s]hundred|(?:{_TENS_ALT})[-\s](?:{_UNIT_ALT})|(?:{_WORD_ALT}))(?![\w-])",
+    re.IGNORECASE,
+)
+
+# "One" is the one number word that is usually not a quantity in English,
+# and a false positive here blocks a draft that was fine. "one of the first
+# UK banks" is a position, not a count.
+_NON_QUANTIFYING_AFTER = {"of", "another", "and"}
+_NON_QUANTIFYING_BEFORE = {"no", "any", "some", "every", "the"}
+
+_WORD_RE = re.compile(r"[A-Za-z']+")
+
+
+def _word_value(phrase):
+    parts = re.split(r"[-\s]+", phrase.lower())
+    if len(parts) == 2:
+        left, right = (_NUMBER_WORDS[x] for x in parts)
+        return left * right if right == 100 else left + right
+    return _NUMBER_WORDS[parts[0]]
+
+
+def _quantifies(text, start, end):
+    """A number word counts only when it is quantifying something: a word
+    follows it, that word isn't one that turns it into a phrase ("one OF
+    the first"), and it isn't preceded by a determiner that does the same
+    ("NO one", "THE one thing"). A number word at the end of a sentence is
+    left alone — conservative on purpose, since the cost of a false
+    positive here is a blocked draft that was correct."""
+    before = _WORD_RE.findall(text[:start])
+    after = _WORD_RE.findall(text[end:end + 40])
+    if not after:
+        return False
+    if after[0].lower() in _NON_QUANTIFYING_AFTER:
+        return False
+    if before and before[-1].lower() in _NON_QUANTIFYING_BEFORE:
+        return False
+    return True
+
+
 def normalize_number(token):
     """Strip the approximation prefix, fold a spelled-out magnitude word to
     its abbreviated letter, strip thousands-grouping commas (only when a
@@ -72,10 +142,31 @@ def normalize_number(token):
     return t
 
 
+def extract_numeric_mentions(text):
+    """Every number in text as {"surface", "value", "kind"} — surface is
+    what was written, value is the normalized token, kind is "digits" or
+    "words".
+
+    Surfaces are kept because the gate has to be able to say WHY a number
+    it once would have blocked is now acceptable: "'zero' and '0' are the
+    same number" is a reportable equivalence, and a set of normalized
+    tokens has already thrown away the evidence for it."""
+    text = text or ""
+    mentions = [{"surface": m.group(0).strip(), "value": normalize_number(m.group(0)),
+                 "kind": "digits"}
+                for m in _NUMERIC_TOKEN_RE.finditer(text)]
+    for m in _NUMBER_WORD_RE.finditer(text):
+        if not _quantifies(text, m.start(), m.end()):
+            continue
+        mentions.append({"surface": m.group(0), "value": str(_word_value(m.group(0))),
+                         "kind": "words"})
+    return mentions
+
+
 def extract_numeric_tokens(text):
     """Every numeric token in text, normalized, deduplicated (a set — this
     gate checks presence, not count)."""
-    return {normalize_number(m.group(0)) for m in _NUMERIC_TOKEN_RE.finditer(text or "")}
+    return {m["value"] for m in extract_numeric_mentions(text)}
 
 
 def build_corpus(*texts):
@@ -100,13 +191,47 @@ def _is_sourced(number, corpus_numbers):
 
 
 def check_numeric_facts(draft_text, corpus_text):
-    """Diff every numeric token in draft_text against corpus_text.
-    Returns {"blocked": bool, "unmatched": [str, ...], "checked": int}."""
-    corpus_numbers = extract_numeric_tokens(corpus_text)
-    draft_numbers = extract_numeric_tokens(draft_text)
-    unmatched = sorted(n for n in draft_numbers if not _is_sourced(n, corpus_numbers))
+    """Diff every number in draft_text against corpus_text.
+
+    Returns {"blocked", "unmatched", "checked", "equivalences"}.
+    "equivalences" names every number that is sourced only because one of
+    the rules above says two surface forms are the same number — the "N+"
+    rule or the number-word mapping. Nothing is fixed invisibly: a draft
+    that got through because "zero" and "0" are the same number says so,
+    and the caller records it in critic_notes."""
+    corpus_mentions = extract_numeric_mentions(corpus_text)
+    corpus_by_value = {}
+    for m in corpus_mentions:
+        corpus_by_value.setdefault(m["value"], set()).add(m["surface"].lower())
+    corpus_numbers = set(corpus_by_value)
+
+    unmatched, equivalences, seen = [], [], set()
+    for mention in extract_numeric_mentions(draft_text):
+        value, surface = mention["value"], mention["surface"]
+        if value in seen:
+            continue
+        seen.add(value)
+        if value in corpus_numbers:
+            # Sourced. Worth reporting only when the two sides wrote it
+            # differently — a word against digits, or the other way.
+            corpus_kinds = {c["kind"] for c in corpus_mentions if c["value"] == value}
+            if mention["kind"] not in corpus_kinds:
+                equivalences.append({
+                    "rule": "number-word", "draft": surface,
+                    "source": sorted(corpus_by_value[value])[0],
+                })
+            continue
+        if not value.endswith("+") and (value + "+") in corpus_numbers:
+            equivalences.append({
+                "rule": "n-plus", "draft": surface,
+                "source": sorted(corpus_by_value[value + "+"])[0],
+            })
+            continue
+        unmatched.append(value)
+
     return {
         "blocked": bool(unmatched),
-        "unmatched": unmatched,
-        "checked": len(draft_numbers),
+        "unmatched": sorted(unmatched),
+        "checked": len(seen),
+        "equivalences": equivalences,
     }
