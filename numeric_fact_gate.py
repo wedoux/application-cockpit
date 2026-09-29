@@ -85,12 +85,26 @@ def build_corpus(*texts):
     return "\n".join(t or "" for t in texts)
 
 
+def _is_sourced(number, corpus_numbers):
+    """A draft number is sourced if it appears verbatim, OR if the draft
+    drops the '+' from a source's "N+" ("35+ designers" in the JD written as
+    "over 35 designers" / "35 designers" / "~35 designers" in the letter).
+    Dropping the '+' can only understate the claim, so it's safe. The
+    reverse stays blocked: a draft "N+" against a source that only says "N"
+    inflates the claim. Found 2026-09-29 when two real cover-letter
+    drafts blocked on "700" (CV: "700+ components") and "35" (JD: "35+
+    product designers") — real, sourced numbers, reworded."""
+    if number in corpus_numbers:
+        return True
+    return not number.endswith("+") and (number + "+") in corpus_numbers
+
+
 def check_numeric_facts(draft_text, corpus_text):
     """Diff every numeric token in draft_text against corpus_text.
     Returns {"blocked": bool, "unmatched": [str, ...], "checked": int}."""
     corpus_numbers = extract_numeric_tokens(corpus_text)
     draft_numbers = extract_numeric_tokens(draft_text)
-    unmatched = sorted(draft_numbers - corpus_numbers)
+    unmatched = sorted(n for n in draft_numbers if not _is_sourced(n, corpus_numbers))
     return {
         "blocked": bool(unmatched),
         "unmatched": unmatched,

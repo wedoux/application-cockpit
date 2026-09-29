@@ -74,3 +74,31 @@ def test_real_draft_with_an_inflated_and_an_invented_number_is_caught():
     assert result["blocked"] is True
     assert "27" in result["unmatched"]
     assert "199%" in result["unmatched"]
+
+
+def test_draft_may_drop_the_plus_from_a_sourced_n_plus():
+    """Regression, 2026-09-29: the CV says "700+ components", the
+    JD says "35+ product designers", and the drafts wrote them as "over 700"
+    and "35". Understating a sourced "N+" is the same fact, not an invention."""
+    corpus = ng.build_corpus("700+ components across 7 products.",
+                             "Our team of 35+ product designers.", "")
+    for draft in ("over 700 components", "more than 700 components",
+                  "~700 components", "a team of 35 designers",
+                  "700+ components and 35+ designers"):
+        result = ng.check_numeric_facts(draft, corpus)
+        assert result["blocked"] is False, draft
+
+
+def test_draft_may_not_add_a_plus_the_source_does_not_have():
+    # "7 products" in the source; "7+ products" in the draft inflates it.
+    corpus = ng.build_corpus("700+ components across 7 products.", "", "")
+    result = ng.check_numeric_facts("across 7+ products", corpus)
+    assert result["blocked"] is True
+    assert "7+" in result["unmatched"]
+
+
+def test_dropping_the_plus_does_not_launder_a_different_number():
+    corpus = ng.build_corpus("700+ components.", "", "")
+    result = ng.check_numeric_facts("800 components", corpus)
+    assert result["blocked"] is True
+    assert "800" in result["unmatched"]
