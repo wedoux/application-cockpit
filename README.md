@@ -32,10 +32,24 @@ SOURCE  ──▶  GATE  ──▶  GENERATE  ──▶  VERIFY  ──▶  REND
 |---|---|---|
 | Source | `job_scanner.py`, `staging.py` | Seven ATS providers: Workday, Greenhouse, Lever, Ashby, SmartRecruiters, Workable, Oracle HCM. Which companies, which titles, which locations are all config, not code. Roles found elsewhere — a manual add, or a scheduled task that stages JSON for the ingest panel to apply — arrive through the same duplicate check. |
 | Gate | `prompt_assembly.py`, `language_gate.py` | Screens the role before a single token is spent. |
-| Generate | `generation.py`, `cv_schema.py`, `cover_letter_schema.py` | Your master CV, writing rules and profile stay resident, and the category picks which master CV and which positioning the model is told to lead with. The CV comes back as structured JSON, not prose, so tailoring can't break the layout. The cover letter has two paths (below). |
-| Verify | `verifier.py`, `numeric_fact_gate.py`, `style_gate.py` | Checks the draft against your actual history, and against your own writing rules. |
+| Generate | `generation.py`, `cv_schema.py`, `cover_letter_schema.py` | Your master CV, writing rules and profile stay resident, and the category picks which master CV and which positioning the model is told to lead with. The CV comes back as structured JSON, not prose, so tailoring can't break the layout. The experience timeline is fixed (below); tailoring happens inside it. The cover letter has two paths (below). |
+| Verify | `verifier.py`, `numeric_fact_gate.py`, `style_gate.py`, `cv_order.py` | Checks the draft against your actual history, against your own writing rules, and against the master CV's own timeline. |
 | Render | `cv_render.py`, `pdf_export.py`, `ats_verify.py` | Jinja to HTML to headless Chrome to a two-page A4 PDF, with the fonts embedded. |
 | Track | `db.py` | SQLite. Every scan, every decision, every document version. |
+
+**The experience timeline is fixed.** A CV's roles come back in exactly the master CV's
+order — never reordered, added, dropped or merged — because a recruiter reads a career by
+its shape and an ATS reconstructs dates and gaps from that order, so promoting the most
+relevant role confuses both. Tailoring happens inside each role (which bullets, which
+first, how they're worded) and in the sections built to carry relevance: the profile
+paragraph and "What I lead", which are ordered by relevance precisely because they have no
+timeline to distort.
+
+Two deterministic checks hold it, neither costing a token. The master CV must itself be
+reverse-chronological, checked before generation so a bad source blocks rather than
+propagating into every draft. And a draft that comes back shuffled is put back in code and
+the fix recorded on the document. A draft whose *roles* differ from the master is a
+different problem — that's flagged, not silently sorted.
 
 **Cover letters have two modes,** set by `cover_letter.mode` in `config.yaml`:
 
