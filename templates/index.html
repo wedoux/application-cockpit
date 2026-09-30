@@ -1466,6 +1466,10 @@ function fidelityDetailText(fidelity){
     const schema = fidelity.repairs.filter(r=>!r.kind);
     const equiv  = fidelity.repairs.filter(r=>r.kind==="numeric-equivalence");
     const rewrit = fidelity.repairs.filter(r=>r.kind==="numeric-rewrite");
+    const order  = fidelity.repairs.filter(r=>r.kind==="experience-order");
+    if(order.length){
+      out += order.map(r=>`  ↕ experience order restored to master CV order: ${r.restored}`).join("\n") + "\n";
+    }
     if(schema.length){
       out += `  ⚠ auto-repaired ${schema.length} field(s). Model returned a malformed shape, recovered deterministically:\n`;
       out += schema.map(r=>`      [${r.shape}] ${r.field}: recovered ${r.recovered} item(s)`).join("\n") + "\n";
@@ -1485,7 +1489,12 @@ function fidelityDetailText(fidelity){
     out += `  numeric repair ladder: ${attempts.map(a=>a.action).join(" → ")}`
          + (cost ? ` ($${cost.toFixed(4)})` : "") + "\n";
   }
-  if(fidelity.flags.length) out += fidelity.flags.map(f=>`  [${f.kind}] not found in master CV: ${f.text}`).join("\n") + "\n";
+  // The entity check's flags mean "this token isn't in the master CV". The
+  // experience-set flag means something else — the draft's ROLES don't match
+  // the master's — so it must not borrow that sentence.
+  if(fidelity.flags.length) out += fidelity.flags.map(f=> f.kind==="experience-set"
+      ? `  [${f.kind}] experience doesn't match the master CV — ${f.text}`
+      : `  [${f.kind}] not found in master CV: ${f.text}`).join("\n") + "\n";
   if(fidelity.gaps.length) out += fidelity.gaps.map(g=>`  ${g}`).join("\n") + "\n";
   if(hasLangGate){
     out += `\n---\nLANGUAGE GATE${lg.overridden?" (overridden)":""}\n`;

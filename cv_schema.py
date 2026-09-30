@@ -53,9 +53,10 @@ CV_TOOL = {
             },
             "experience": {
                 "type": "array",
-                "description": ("A JSON array of objects, one per role. NOT a string. NOT XML. No "
-                                 "<item> tags or any other markup — each array element is a plain "
-                                 "JSON object with the fields below."),
+                "description": ("A JSON array of objects, one per role, IN THE MASTER CV'S "
+                                 "ORDER — never reordered, added, dropped or merged. NOT a "
+                                 "string. NOT XML. No <item> tags or any other markup — each "
+                                 "array element is a plain JSON object with the fields below."),
                 "items": {
                     "type": "object",
                     "properties": {

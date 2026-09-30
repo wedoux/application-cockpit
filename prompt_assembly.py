@@ -145,13 +145,23 @@ def build_system_prompt(config, master_cv, category=None):
 CV_TASK = """\
 TASK: Produce a tailored CV for this role as a single emit_cv tool call. Fields:
 
-- profile: 2-4 sentence positioning paragraph, tailored to this role.
+- profile: 2-4 sentence positioning paragraph. Say plainly why this background
+  fits THIS role. This is the first place relevance is argued, and it carries
+  weight the experience order is not allowed to carry.
 - what_i_lead: capability lines relevant to this role, each {label, detail} —
   label a short 2-4 word heading (e.g. "Design organisations"), detail the
   supporting description. Matches the master CV's own bold-label bullet style.
-- experience: one entry per role (reorder and reweight to lead with what's most
-  relevant to this JD), each with role, company, logo_key, dates, context, and
-  bullets (achievement bullets, reordered/reweighted to fit this JD).
+  THIS is where cross-role relevance goes: choose which capabilities to show
+  and put the most relevant to this JD first. It has no timeline, so ordering
+  it by relevance costs nothing.
+- experience: one entry per role, in EXACTLY the order the master CV lists
+  them. Never reorder, add, drop or merge roles, and never promote a role
+  because it is more relevant. A CV's experience is reverse-chronological:
+  a recruiter reads the career by its shape and an ATS reconstructs dates and
+  gaps from that order, so resequencing it misleads both.
+  Tailor INSIDE each role: choose which bullets to use, put the most relevant
+  achievement first within that role, and reword to the JD. Each entry has
+  role, company, logo_key, dates, context, and bullets.
 - projects: OPTIONAL. Only for standalone projects (e.g. an open-source tool,
   an AI/technical side build) that don't fit the employment-history shape of
   "experience" — name, context, bullets. Omit the field, or use an empty
@@ -168,9 +178,12 @@ the master CV gives no explicit date for an entry, use null — never infer or
 approximate a boundary (do not write "Pre-2015" or anything similar). A null
 date renders as no date line at all; that is the correct, honest result.
 
-Rules: reorder and reweight to fit the JD, but every fact must trace to the
-master CV above. Do not add companies, titles, dates, or achievements that are
-not in it. Put "[GAP: ...]" inside the relevant field where the JD wants
+Rules: the experience timeline is fixed — same roles, same order as the master
+CV, always. Tailor within it: bullet selection, bullet order inside a role, and
+wording. Relevance to this JD is argued in profile and what_i_lead, which are
+ordered by relevance precisely because they carry no timeline. Every fact must
+trace to the master CV above. Do not add companies, titles, dates, or
+achievements that are not in it. Put "[GAP: ...]" inside the relevant field where the JD wants
 something the CV doesn't evidence. Call emit_cv exactly once with the complete
 document — no text outside the tool call.
 

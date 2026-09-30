@@ -29,6 +29,7 @@ import db as dbmod
 import generation
 import jd_fetch
 import language_gate
+import cv_order
 import cv_schema
 import numeric_fact_gate as ng
 import numeric_repair
@@ -377,6 +378,14 @@ def run_fidelity_gates(content_md, *, master_cv_text, master_cv_path, jd_text,
     of the JD and declared languages, not of this text, so re-running it on
     an edit would re-decide the role instead of checking the edit; an edited
     version carries its parent's verdict, which is still true of the role.
+
+    The CV experience-order check (cv_order.py) is NOT here, deliberately.
+    It needs the master CV's parsed role list and it can mutate
+    content_json, which this function never touches — it takes rendered text
+    and returns a verdict. The order check runs in the generate route,
+    around this call: the master file is checked before generation, and a
+    restored order re-enters through here so critic_notes describes the
+    document that was actually stored.
     """
     fidelity = verifier.verify_fidelity(content_md, master_cv_text)
     fidelity["master_cv_file"] = Path(master_cv_path).name
@@ -599,6 +608,23 @@ def api_generate(role_id):
                         "message": "Pick a category (Leadership / Advisory / Senior IC) "
                                    "before generating."}), 400
 
+    # The master CV's own timeline has to be right before anything is
+    # generated from it. Checked HERE, before the API call, because a draft
+    # written against an out-of-order master inherits the order and would
+    # cost tokens to produce something that has to be thrown away. The fix
+    # belongs in the one source file, not in every draft.
+    try:
+        master_cv_path, master_cv_text = pa.resolve_master_cv(role.get("category"), cfg)
+        cv_order.check_master_order(master_cv_text, Path(master_cv_path).name)
+    except pa.AssemblyError as e:
+        conn.close()
+        return jsonify({"ok": False, "error": "no_category", "message": str(e)}), 400
+    except cv_order.MasterOrderError as e:
+        conn.close()
+        print(f"[generate] role {role_id} BLOCKED by master CV order: {e}")
+        return jsonify({"ok": False, "error": "master_cv_order",
+                        "message": str(e)}), 422
+
     # professional-profile.md is part of the numeric-fact corpus (see below) —
     # loaded once per request, not per doc_type, since it doesn't change.
     profile_text = Path(cfg["paths"]["about_me"]).read_text(encoding="utf-8")
@@ -708,6 +734,51 @@ def api_generate(role_id):
                         gen, fidelity = fixed, fixed_fidelity
                         if dt == "cv":
                             tailored_cv_text = gen["content_md"]
+
+        # Experience order. Deterministic, no API call: the master CV's role
+        # order is the CV's timeline, and the model does not get a vote on it.
+        if dt == "cv" and gen.get("content_json"):
+            master_roles = cv_order.parse_master_roles(gen["master_cv_text"])
+            verdict = cv_order.compare_experience_order(
+                gen["content_json"].get("experience"), master_roles)
+            if verdict["status"] == "reordered":
+                # Mechanical, so fix it in code. Regenerating would pay a
+                # model to redo something a sort already did correctly.
+                gen["content_json"]["experience"] = cv_order.restore_order(
+                    gen["content_json"]["experience"], master_roles)
+                gen["content_md"] = cv_schema.cv_json_to_markdown(gen["content_json"])
+                if dt == "cv":
+                    tailored_cv_text = gen["content_md"]
+                # Re-gate the text that will actually be stored. Permuting
+                # blocks cannot change any gate's verdict (every check here
+                # is over a set or is order-independent), so this is belt
+                # rather than braces — but critic_notes has to describe the
+                # document that got stored, not the one before the sort.
+                carried = list(fidelity["repairs"])
+                fidelity = run_fidelity_gates(gen["content_md"], **_gate_kwargs(gen))
+                fidelity["repairs"] = carried + [{
+                    "kind": "experience-order",
+                    "restored": ", ".join(verdict["order"]),
+                }]
+                print(f"[generate] role {role_id} cv: experience order restored "
+                      f"to master CV order")
+            elif verdict["status"] == "mismatch":
+                # NOT fixed. Which roles belong in this CV is a fidelity
+                # question, and reordering whatever came back would hide it.
+                # Recorded at the entity check's severity — advisory, in the
+                # same flags list, because it is the same kind of claim: the
+                # draft says something the master CV does not.
+                parts = []
+                if verdict["added"]:
+                    parts.append("not in the master CV: " + ", ".join(verdict["added"]))
+                if verdict["dropped"]:
+                    parts.append("missing from the draft: " + ", ".join(verdict["dropped"]))
+                fidelity["flags"].append({
+                    "kind": "experience-set",
+                    "text": "; ".join(parts) or "duplicate roles in the draft",
+                })
+                print(f"[generate] role {role_id} cv: experience SET differs from "
+                      f"the master CV — flagged, not reordered")
 
         # Rung 4 — stop, but keep the draft. Discarding it was why there was
         # never any record of what a blocked draft actually said.
