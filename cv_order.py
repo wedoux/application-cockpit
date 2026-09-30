@@ -165,7 +165,34 @@ def draft_company(value):
 def _earlier_names(value):
     """The companies a draft's Earlier entry names. The model joins them
     with slashes ("A / B / C"); commas are accepted too."""
-    return [p.strip() for p in re.split(r"[/,]", value or "") if p.strip()]
+    return [p.strip() for p in re.split(r"[/,;]", value or "") if p.strip()]
+
+
+# Words that make a company field a LABEL rather than a company claim.
+# Closed on purpose: "Earlier roles" is built entirely from these, an
+# invented employer is not, so exempting a label cannot exempt a fabrication.
+_LABEL_WORDS = {"earlier", "early", "prior", "previous", "other", "further",
+                "role", "roles", "position", "positions", "experience",
+                "and", "the", "plus", "various"}
+
+
+def is_generic_label(value):
+    """True when the Earlier entry's company field names no company at all.
+
+    The model does this: asked to keep the Earlier block last and undated,
+    it wrote company="Earlier roles" and moved the actual companies into the
+    role field and the bullets. That is a reasonable shape, and the contents
+    check flagged it as an invented employer — the third time this check
+    fired on a correct CV.
+
+    A label makes no company claim, so there is nothing here to verify. The
+    claims that moved into the prose are not unchecked: verifier.py's entity
+    check already scans that same text for phrases absent from the master CV,
+    at the same advisory severity. Writing a second, weaker company extractor
+    over free prose would duplicate a rule that already exists and would be
+    the more fragile of the two."""
+    tokens = _norm(value).split()
+    return bool(tokens) and all(t in _LABEL_WORDS for t in tokens)
 
 
 def check_earlier_contents(value, earlier_text):
@@ -178,7 +205,12 @@ def check_earlier_contents(value, earlier_text):
     parser would happily decide "automotive" is a former employer and flag
     a correct CV. Containment can only fail to catch something, never
     invent something, and failing safe is the right direction for a check
-    whose false positives are what this whole pass is fixing."""
+    whose false positives are what this whole pass is fixing.
+
+    A generic label ("Earlier roles") names no company, so there is nothing
+    to check — see is_generic_label for why that is not a loophole."""
+    if is_generic_label(value):
+        return [], False
     haystack = _norm(earlier_text)
     unknown, positions = [], []
     for name in _earlier_names(value):

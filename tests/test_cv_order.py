@@ -269,6 +269,43 @@ def test_an_earlier_entry_with_its_companies_reversed_is_flagged():
     assert any("out of order" in r for r in verdict["reasons"])
 
 
+def test_a_generic_label_in_the_earlier_entry_is_not_an_invented_company():
+    """Asked to keep the Earlier block last and undated, the model wrote
+    company="Earlier roles" and moved the companies into the role field and
+    the bullets. That is a reasonable shape, and the contents check called
+    it an invented employer — the third time this check fired on a correct
+    CV. A label makes no company claim; the claims that moved into the prose
+    are covered by the entity check, which scans the same text."""
+    for label in ("Earlier roles", "Earlier", "Previous positions",
+                  "Other experience", "earlier roles and positions"):
+        drafted = _exp("Acme Corp", "Globex", "Initech", label)
+        assert co.compare_experience_order(drafted, EARLIER_ROLES)["status"] == "ok", label
+
+
+def test_a_label_exemption_does_not_exempt_an_invented_company():
+    """The loophole the contents check exists to close stays shut: an
+    invented employer is not built out of label words."""
+    assert co.is_generic_label("Hooli") is False
+    assert co.is_generic_label("Earlier roles at Hooli") is False
+    drafted = _exp("Acme Corp", "Globex", "Initech", "Hooli")
+    verdict = co.compare_experience_order(drafted, EARLIER_ROLES)
+    assert verdict["status"] == "mismatch"
+    assert any("Hooli" in r for r in verdict["reasons"])
+
+
+def test_a_labelled_earlier_entry_must_still_come_last():
+    drafted = _exp("Acme Corp", "Earlier roles", "Globex", "Initech")
+    verdict = co.compare_experience_order(drafted, EARLIER_ROLES)
+    assert verdict["status"] == "mismatch"
+    assert any("Earlier summary is not last" in r for r in verdict["reasons"])
+
+
+def test_semicolons_separate_earlier_companies_too():
+    drafted = _exp("Acme Corp", "Globex", "Initech",
+                   "Umbrella Co; Vandelay; Stark Industries")
+    assert co.compare_experience_order(drafted, EARLIER_ROLES)["status"] == "ok"
+
+
 def test_a_master_with_no_earlier_block_still_rejects_an_extra_entry():
     drafted = _exp("Acme Corp", "Globex", "Initech", "Hooli / Umbrella Co")
     verdict = co.compare_experience_order(drafted, MASTER)
