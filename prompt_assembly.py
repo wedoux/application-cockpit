@@ -162,6 +162,12 @@ TASK: Produce a tailored CV for this role as a single emit_cv tool call. Fields:
   Tailor INSIDE each role: choose which bullets to use, put the most relevant
   achievement first within that role, and reword to the JD. Each entry has
   role, company, logo_key, dates, context, and bullets.
+  If the master CV ends its experience section with an "Earlier" block, you
+  may render it as one final entry. It goes LAST, it has no dates, and the
+  companies inside it stay in the order the master lists them — do not
+  reverse them and do not add a company the block does not name.
+  company: the employer only. No city, no country — location belongs in the
+  master CV's own heading, not in this field.
 - projects: OPTIONAL. Only for standalone projects (e.g. an open-source tool,
   an AI/technical side build) that don't fit the employment-history shape of
   "experience" — name, context, bullets. Omit the field, or use an empty

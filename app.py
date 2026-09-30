@@ -768,14 +768,9 @@ def api_generate(role_id):
                 # Recorded at the entity check's severity — advisory, in the
                 # same flags list, because it is the same kind of claim: the
                 # draft says something the master CV does not.
-                parts = []
-                if verdict["added"]:
-                    parts.append("not in the master CV: " + ", ".join(verdict["added"]))
-                if verdict["dropped"]:
-                    parts.append("missing from the draft: " + ", ".join(verdict["dropped"]))
                 fidelity["flags"].append({
                     "kind": "experience-set",
-                    "text": "; ".join(parts) or "duplicate roles in the draft",
+                    "text": "; ".join(verdict["reasons"]),
                 })
                 print(f"[generate] role {role_id} cv: experience SET differs from "
                       f"the master CV — flagged, not reordered")

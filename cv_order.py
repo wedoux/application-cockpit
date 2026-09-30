@@ -42,8 +42,12 @@ _MONTHS = {m: i for i, m in enumerate(
 # a sweep of every ### in the file.
 _EXPERIENCE_HEADINGS = ("experience", "selected engagements")
 
-# A heading with no em dash is not a role: "### Earlier" is a summary block.
+# A heading with no em dash is not a dated role. "### Earlier" is the one
+# such heading that still belongs to the timeline: a prose summary of the
+# oldest roles, carried as a trailing undated sentinel so a draft may render
+# it as a final experience entry without looking like an invented role.
 _EM_DASH = "—"
+_EARLIER = "earlier"
 
 _DATE_RE = re.compile(
     r"^\s*(?P<mon>[A-Za-z]{3})[a-z]*\.?\s+(?P<year>\d{4})", re.IGNORECASE)
@@ -73,25 +77,40 @@ def _company_from_heading(heading):
 
 
 def parse_master_roles(master_cv_text):
-    """Every role in the master CV's experience section, in file order, as
-    {"company", "heading", "start"}. start is (year, month) or None when the
-    entry states no date."""
-    roles, in_section, pending = [], False, None
+    """Every role in the master CV's experience section, in file order.
+
+    A dated role is {"company", "heading", "start", "earlier": False}.
+    The "### Earlier" block, if present, comes last as
+    {"company": None, "heading": "Earlier", "start": None, "earlier": True,
+     "text": <its prose>} — the prose is kept because a draft that renders
+    Earlier as an experience entry names companies inside it, and those have
+    to be checkable against something.
+    """
+    roles, in_section, pending, earlier = [], False, None, None
     for line in (master_cv_text or "").splitlines():
         stripped = line.strip()
         if stripped.startswith("## "):
             in_section = _norm(stripped[3:]) in _EXPERIENCE_HEADINGS
-            pending = None
+            pending = earlier = None
             continue
         if not in_section:
             continue
         if stripped.startswith("### "):
             heading = stripped[4:].strip()
+            pending = earlier = None
+            if _norm(heading) == _EARLIER:
+                earlier = {"company": None, "heading": heading, "start": None,
+                           "earlier": True, "text": ""}
+                roles.append(earlier)
+                continue
             company = _company_from_heading(heading)
-            pending = None
             if company:
-                pending = {"company": company, "heading": heading, "start": None}
+                pending = {"company": company, "heading": heading,
+                           "start": None, "earlier": False}
                 roles.append(pending)
+            continue
+        if earlier is not None and stripped and not stripped.startswith("---"):
+            earlier["text"] = (earlier["text"] + " " + stripped).strip()
             continue
         # The date line is the first non-empty line under the heading.
         if pending is not None and stripped:
@@ -117,7 +136,8 @@ def check_master_order(master_cv_text, master_cv_name):
     a legitimate, documented state in this codebase (see the CV prompt's
     dates rule), and inventing an ordering for one would be the same class
     of error as inventing the date."""
-    dated = [r for r in parse_master_roles(master_cv_text) if r["start"]]
+    dated = [r for r in parse_master_roles(master_cv_text)
+             if r["start"] and not r.get("earlier")]
     for earlier, later in zip(dated, dated[1:]):
         if later["start"] > earlier["start"]:
             raise MasterOrderError(
@@ -130,43 +150,115 @@ def check_master_order(master_cv_text, master_cv_name):
             )
 
 
+def draft_company(value):
+    """The company a draft entry names, normalised the SAME way the master
+    headings are: first comma-segment, so a city suffix is dropped.
+
+    The model writes "Acme Corp, Geneva" into the company field while the
+    master heading is parsed down to "Acme Corp". Normalising only one side
+    made every role read as simultaneously missing and invented — the
+    signature of a matching bug, and it fired on a correct CV the first time
+    this check ran for real."""
+    return _norm((value or "").split(",", 1)[0])
+
+
+def _earlier_names(value):
+    """The companies a draft's Earlier entry names. The model joins them
+    with slashes ("A / B / C"); commas are accepted too."""
+    return [p.strip() for p in re.split(r"[/,]", value or "") if p.strip()]
+
+
+def check_earlier_contents(value, earlier_text):
+    """Every company in a draft's Earlier entry must appear in the master's
+    Earlier line, in the same order. Returns (unknown_names, out_of_order).
+
+    Containment against the raw line rather than parsing it into a list.
+    That line is free prose and varies by variant — one of them ends "for
+    finance, automotive, and e-commerce brands", where a comma-splitting
+    parser would happily decide "automotive" is a former employer and flag
+    a correct CV. Containment can only fail to catch something, never
+    invent something, and failing safe is the right direction for a check
+    whose false positives are what this whole pass is fixing."""
+    haystack = _norm(earlier_text)
+    unknown, positions = [], []
+    for name in _earlier_names(value):
+        needle = _norm(name)
+        if not needle:
+            continue
+        at = haystack.find(needle)
+        if at < 0:
+            unknown.append(name)
+        else:
+            positions.append(at)
+    return unknown, positions != sorted(positions)
+
+
 def compare_experience_order(experience, master_roles):
     """Compare a generated experience array against the master's role order.
 
     Returns one of:
       {"status": "ok"}
       {"status": "reordered", "order": [...]}   same roles, wrong order
-      {"status": "mismatch", "added": [...], "dropped": [...]}
+      {"status": "mismatch", "reasons": [str, ...]}
 
-    A reorder is mechanical and gets fixed. A mismatch is a fidelity
-    question — which roles belong in this CV — and is reported, never
-    quietly resolved by reordering whatever happens to be there.
+    A permutation of the dated roles is mechanical and gets fixed. Anything
+    about WHICH roles are present is a fidelity question and is reported,
+    never quietly resolved by sorting whatever happens to be there.
+
+    The Earlier block is a trailing undated sentinel. A draft may render it
+    as a final entry, it is exempt from the chronology check, and it must
+    come last — a summary of several old roles sitting in the middle of a
+    dated sequence means the model misread the structure, which is worth
+    seeing rather than silently sorting away.
     """
-    master_order = [_norm(r["company"]) for r in master_roles]
-    drafted = [_norm((e or {}).get("company")) for e in (experience or [])]
+    dated = [r for r in master_roles if not r.get("earlier")]
+    earlier = next((r for r in master_roles if r.get("earlier")), None)
+    master_order = [_norm(r["company"]) for r in dated]
+    entries = [(i, draft_company((e or {}).get("company")), e)
+               for i, e in enumerate(experience or [])]
 
-    if not master_order or not drafted:
+    if not master_order or not entries:
         return {"status": "ok"}
 
-    added = [d for d in drafted if d not in master_order]
-    dropped = [m for m in master_order if m not in drafted]
-    if added or dropped or len(drafted) != len(set(drafted)):
-        return {
-            "status": "mismatch",
-            "added": [e.get("company") for e in experience
-                      if _norm(e.get("company")) in added],
-            "dropped": [r["company"] for r in master_roles
-                        if _norm(r["company"]) in dropped],
-        }
+    matched = [(i, c, e) for i, c, e in entries if c in master_order]
+    extra = [(i, c, e) for i, c, e in entries if c not in master_order]
 
-    if drafted == [m for m in master_order if m in drafted]:
+    reasons = []
+    present = {c for _, c, _ in matched}
+    missing = [r["company"] for r in dated if _norm(r["company"]) not in present]
+    if missing:
+        reasons.append("missing from the draft: " + ", ".join(missing))
+    if len(present) != len(matched):
+        reasons.append("the same role appears more than once")
+
+    for i, _, e in extra:
+        raw = (e or {}).get("company") or "(unnamed)"
+        if earlier is None:
+            reasons.append(f"not in the master CV: {raw}")
+            continue
+        unknown, out_of_order = check_earlier_contents(raw, earlier["text"])
+        if unknown:
+            reasons.append("not in the master CV's Earlier line: " + ", ".join(unknown))
+        if out_of_order:
+            reasons.append(f"the Earlier entry lists its companies out of order: {raw}")
+        if i < max((j for j, _, _ in matched), default=-1):
+            reasons.append("the Earlier summary is not last")
+
+    if reasons:
+        return {"status": "mismatch", "reasons": reasons}
+
+    if [c for _, c, _ in matched] == [m for m in master_order if m in present]:
         return {"status": "ok"}
-    return {"status": "reordered", "order": [r["company"] for r in master_roles
-                                             if _norm(r["company"]) in drafted]}
+    return {"status": "reordered",
+            "order": [r["company"] for r in dated if _norm(r["company"]) in present]}
 
 
 def restore_order(experience, master_roles):
     """The generated entries, in the master CV's order. Content untouched —
-    only the sequence changes."""
-    position = {_norm(r["company"]): i for i, r in enumerate(master_roles)}
-    return sorted(experience, key=lambda e: position.get(_norm((e or {}).get("company")), len(position)))
+    only the sequence changes. An entry matching no dated role (the Earlier
+    summary) sorts last, which is where the master puts it."""
+    dated = [r for r in master_roles if not r.get("earlier")]
+    position = {_norm(r["company"]): i for i, r in enumerate(dated)}
+    return sorted(experience,
+                  key=lambda e: position.get(draft_company((e or {}).get("company")),
+                                             len(position)))

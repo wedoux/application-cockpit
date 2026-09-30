@@ -92,25 +92,33 @@ Summarised.
 # Parsing both master formats
 # ------------------------------------------------------------------
 
+def _dated(text):
+    return [r for r in co.parse_master_roles(text) if not r["earlier"]]
+
+
 def test_parses_the_role_company_city_format():
-    roles = co.parse_master_roles(HEAD_OF_DESIGN)
+    roles = _dated(HEAD_OF_DESIGN)
     assert [r["company"] for r in roles] == ["Acme Corp", "Globex", "Initech"]
     assert [r["start"] for r in roles] == [(2022, 5), (2021, 5), (2015, 6)]
 
 
 def test_parses_the_company_role_city_format():
-    roles = co.parse_master_roles(ADVISORY)
+    roles = _dated(ADVISORY)
     assert [r["company"] for r in roles] == ["Acme Corp", "Globex"]
     assert [r["start"] for r in roles] == [(2022, 5), (2021, 5)]
 
 
-def test_the_earlier_block_and_the_ai_project_are_not_roles():
-    """"### Earlier" is a summary and the AI project lives in its own
-    section. Both have ### headings, which is why parsing is section-scoped
-    and why a heading with no em dash is skipped."""
-    companies = [r["company"] for r in co.parse_master_roles(HEAD_OF_DESIGN)]
-    assert "Earlier" not in companies
-    assert not any("Sidewinder" in c for c in companies)
+def test_the_ai_project_is_not_a_role_and_earlier_is_only_a_sentinel():
+    """The AI project lives in its own section and must never be read as
+    employment. "### Earlier" is in the experience section and does belong
+    to the timeline, but as an undated trailing sentinel, never as a dated
+    role — it has no company of its own."""
+    roles = co.parse_master_roles(HEAD_OF_DESIGN)
+    assert not any("Sidewinder" in (r["company"] or "") for r in roles)
+    assert [r["company"] for r in roles if not r["earlier"]] == \
+        ["Acme Corp", "Globex", "Initech"]
+    assert [r["earlier"] for r in roles] == [False, False, False, True]
+    assert roles[-1]["company"] is None
 
 
 # ------------------------------------------------------------------
@@ -192,10 +200,93 @@ def test_restore_order_puts_them_back_without_touching_content():
     assert restored[2]["bullets"] == ["a distinctive bullet"], "content is untouched"
 
 
+def test_a_city_suffix_on_a_draft_company_still_matches():
+    """The model writes "Acme Corp, Geneva" into the company field while the
+    master heading parses down to "Acme Corp". Normalising only one side
+    made every role read as simultaneously missing and invented, and that
+    fired on a correct CV the first time this ran for real."""
+    drafted = _exp("Acme Corp, Geneva", "Globex, Zurich", "Initech, London")
+    assert co.compare_experience_order(drafted, MASTER)["status"] == "ok"
+    assert co.draft_company("Acme Corp, Geneva") == co.draft_company("Acme Corp")
+
+
+def test_a_city_suffix_does_not_hide_a_genuinely_different_company():
+    verdict = co.compare_experience_order(
+        _exp("Acme Corp, Geneva", "Hooli, Palo Alto", "Initech, London"), MASTER)
+    assert verdict["status"] == "mismatch"
+    assert any("Hooli" in r for r in verdict["reasons"])
+
+
+# ------------------------------------------------------------------
+# The Earlier block: a trailing, undated sentinel
+# ------------------------------------------------------------------
+
+EARLIER_MASTER = HEAD_OF_DESIGN.replace(
+    "### Earlier\n\nRoles before 2015, summarised.",
+    "### Earlier\n\nFounder, Umbrella Co (a thing). UX Lead, Vandelay (another). "
+    "Architect, Stark Industries (a third).")
+EARLIER_ROLES = co.parse_master_roles(EARLIER_MASTER)
+
+
+def test_the_earlier_block_is_parsed_as_a_trailing_sentinel():
+    assert EARLIER_ROLES[-1]["earlier"] is True
+    assert EARLIER_ROLES[-1]["start"] is None
+    assert "Umbrella Co" in EARLIER_ROLES[-1]["text"]
+    assert [r["company"] for r in EARLIER_ROLES if not r["earlier"]] == \
+        ["Acme Corp", "Globex", "Initech"]
+
+
+def test_an_earlier_entry_matched_and_last_is_ok():
+    drafted = _exp("Acme Corp", "Globex", "Initech",
+                   "Umbrella Co / Vandelay / Stark Industries")
+    assert co.compare_experience_order(drafted, EARLIER_ROLES)["status"] == "ok"
+
+
+def test_an_earlier_entry_promoted_above_a_dated_role_is_flagged():
+    """A summary of several old roles sitting mid-sequence means the model
+    misread the structure. Worth seeing, not worth silently sorting away."""
+    drafted = _exp("Acme Corp", "Umbrella Co / Vandelay", "Globex", "Initech")
+    verdict = co.compare_experience_order(drafted, EARLIER_ROLES)
+    assert verdict["status"] == "mismatch"
+    assert any("Earlier summary is not last" in r for r in verdict["reasons"])
+
+
+def test_an_earlier_entry_naming_an_unknown_company_is_flagged():
+    """Without this, a role invented inside the Earlier summary would slip
+    through — it matches no dated role, so it would otherwise be waved
+    past as "that's just the Earlier block"."""
+    drafted = _exp("Acme Corp", "Globex", "Initech", "Umbrella Co / Hooli")
+    verdict = co.compare_experience_order(drafted, EARLIER_ROLES)
+    assert verdict["status"] == "mismatch"
+    assert any("Earlier line" in r and "Hooli" in r for r in verdict["reasons"])
+
+
+def test_an_earlier_entry_with_its_companies_reversed_is_flagged():
+    drafted = _exp("Acme Corp", "Globex", "Initech",
+                   "Stark Industries / Vandelay / Umbrella Co")
+    verdict = co.compare_experience_order(drafted, EARLIER_ROLES)
+    assert verdict["status"] == "mismatch"
+    assert any("out of order" in r for r in verdict["reasons"])
+
+
+def test_a_master_with_no_earlier_block_still_rejects_an_extra_entry():
+    drafted = _exp("Acme Corp", "Globex", "Initech", "Hooli / Umbrella Co")
+    verdict = co.compare_experience_order(drafted, MASTER)
+    assert verdict["status"] == "mismatch"
+    assert any("not in the master CV" in r for r in verdict["reasons"])
+
+
+def test_earlier_sorts_last_when_the_dated_roles_are_restored():
+    drafted = _exp("Globex", "Acme Corp", "Initech", "Umbrella Co / Vandelay")
+    restored = co.restore_order(drafted, EARLIER_ROLES)
+    assert [e["company"] for e in restored] == [
+        "Acme Corp", "Globex", "Initech", "Umbrella Co / Vandelay"]
+
+
 def test_an_added_role_is_a_mismatch_not_a_reorder():
     verdict = co.compare_experience_order(_exp("Acme Corp", "Hooli", "Globex"), MASTER)
     assert verdict["status"] == "mismatch"
-    assert verdict["added"] == ["Hooli"]
+    assert any("Hooli" in r for r in verdict["reasons"])
 
 
 def test_a_dropped_role_is_a_mismatch():
@@ -205,7 +296,7 @@ def test_a_dropped_role_is_a_mismatch():
     by sorting what is left."""
     verdict = co.compare_experience_order(_exp("Acme Corp", "Globex"), MASTER)
     assert verdict["status"] == "mismatch"
-    assert verdict["dropped"] == ["Initech"]
+    assert any("missing from the draft: Initech" in r for r in verdict["reasons"])
 
 
 def test_a_duplicated_role_is_a_mismatch():
